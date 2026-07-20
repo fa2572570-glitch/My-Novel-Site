@@ -25,7 +25,10 @@ import {
   Pause,
   Link,
   CheckSquare,
-  Copy
+  Copy,
+  Book,
+  Layers,
+  Palette
 } from 'lucide-react';
 
 // Define Interface for Chapter
@@ -234,28 +237,34 @@ export default function App() {
 
   // --- READING CONTROLS STATE ---
   const [theme, setTheme] = useState<'dark' | 'light' | 'sepia' | 'custom'>(() => {
-    return (localStorage.getItem('novel_theme') as any) || 'dark';
+    const saved = localStorage.getItem('novel_theme');
+    if (saved) return saved as any;
+    const def = localStorage.getItem('novel_default_profile_theme');
+    return (def as any) || 'dark';
   });
   const [customBgColor, setCustomBgColor] = useState(() => {
-    return localStorage.getItem('novel_custom_bg') || '#1E2128';
+    return localStorage.getItem('novel_custom_bg') || localStorage.getItem('novel_default_profile_custom_bg') || '#1E2128';
   });
   const [fontSize, setFontSize] = useState(() => {
-    const saved = localStorage.getItem('novel_font_size');
+    const saved = localStorage.getItem('novel_font_size') || localStorage.getItem('novel_default_profile_font_size');
     return saved ? parseInt(saved, 10) : 21;
   });
   const [lineHeight, setLineHeight] = useState(() => {
-    const saved = localStorage.getItem('novel_line_height');
+    const saved = localStorage.getItem('novel_line_height') || localStorage.getItem('novel_default_profile_line_height');
     return saved ? parseFloat(saved) : 2.0;
   });
   const [paragraphSpacing, setParagraphSpacing] = useState(() => {
-    const saved = localStorage.getItem('novel_paragraph_spacing');
+    const saved = localStorage.getItem('novel_paragraph_spacing') || localStorage.getItem('novel_default_profile_paragraph_spacing');
     return saved ? parseFloat(saved) : 2.5;
   });
   const [fontFamily, setFontFamily] = useState<string>(() => {
-    return localStorage.getItem('novel_font_family') || 'Georgia';
+    return localStorage.getItem('novel_font_family') || localStorage.getItem('novel_default_profile_font_family') || 'Georgia';
   });
   const [pageWidth, setPageWidth] = useState<'narrow' | 'medium' | 'wide' | 'full'>(() => {
-    return (localStorage.getItem('novel_page_width') as any) || 'narrow';
+    const saved = localStorage.getItem('novel_page_width');
+    if (saved) return saved as any;
+    const def = localStorage.getItem('novel_default_profile_page_width');
+    return (def as any) || 'narrow';
   });
   const [isLandscape, setIsLandscape] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -265,7 +274,32 @@ export default function App() {
   });
   const [infiniteScroll, setInfiniteScroll] = useState(() => {
     const saved = localStorage.getItem('novel_infinite_scroll');
-    return saved !== null ? saved === 'true' : true;
+    if (saved !== null) return saved === 'true';
+    const def = localStorage.getItem('novel_default_profile_infinite_scroll');
+    return def !== null ? def === 'true' : true;
+  });
+
+  // --- AESTHETIC BOOK-PAGE FRAMING STATE ---
+  const [frameEnabled, setFrameEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('novel_frame_enabled');
+    if (saved !== null) return saved === 'true';
+    const def = localStorage.getItem('novel_default_profile_frame_enabled');
+    return def !== null ? def === 'true' : false;
+  });
+  const [frameTheme, setFrameTheme] = useState<'cream' | 'paper' | 'dark' | 'amber' | 'match'>(() => {
+    return (localStorage.getItem('novel_frame_theme') as any) || (localStorage.getItem('novel_default_profile_frame_theme') as any) || 'cream';
+  });
+  const [frameRadius, setFrameRadius] = useState<'none' | 'sm' | 'md' | 'lg' | 'xl' | '2xl'>(() => {
+    return (localStorage.getItem('novel_frame_radius') as any) || (localStorage.getItem('novel_default_profile_frame_radius') as any) || 'lg';
+  });
+  const [frameBorder, setFrameBorder] = useState<'none' | 'thin' | 'medium' | 'double' | 'ornament'>(() => {
+    return (localStorage.getItem('novel_frame_border') as any) || (localStorage.getItem('novel_default_profile_frame_border') as any) || 'thin';
+  });
+  const [frameShadow, setFrameShadow] = useState<'none' | 'soft' | 'medium' | 'deep'>(() => {
+    return (localStorage.getItem('novel_frame_shadow') as any) || (localStorage.getItem('novel_default_profile_frame_shadow') as any) || 'medium';
+  });
+  const [framePadding, setFramePadding] = useState<'compact' | 'standard' | 'relaxed'>(() => {
+    return (localStorage.getItem('novel_frame_padding') as any) || (localStorage.getItem('novel_default_profile_frame_padding') as any) || 'standard';
   });
 
   // --- ADD / PASTE CHAPTER FORMS ---
@@ -440,6 +474,30 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('novel_infinite_scroll', infiniteScroll.toString());
   }, [infiniteScroll]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_enabled', frameEnabled.toString());
+  }, [frameEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_theme', frameTheme);
+  }, [frameTheme]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_radius', frameRadius);
+  }, [frameRadius]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_border', frameBorder);
+  }, [frameBorder]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_shadow', frameShadow);
+  }, [frameShadow]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_padding', framePadding);
+  }, [framePadding]);
 
   // Reset distraction-free click tracking when state changes
   useEffect(() => {
@@ -623,6 +681,93 @@ export default function App() {
   };
 
   const currentTheme = getThemeDetails();
+
+  // --- GET BEAUTIFUL BOOK-PAGE FRAME STYLES ---
+  const getFrameStyles = () => {
+    if (!frameEnabled) return { cardClass: '', cardStyle: {}, outerStyle: {} };
+
+    // 1. Theme/background & text colors
+    let cardBg = '#FDFBF7';
+    let cardText = '#2D251E';
+    let cardBorderColor = 'rgba(215, 203, 185, 0.6)';
+
+    if (frameTheme === 'paper') {
+      cardBg = '#FFFFFF';
+      cardText = '#1A1A1A';
+      cardBorderColor = 'rgba(0, 0, 0, 0.08)';
+    } else if (frameTheme === 'amber') {
+      cardBg = '#FDF6E2';
+      cardText = '#4A2A00';
+      cardBorderColor = 'rgba(217, 119, 6, 0.2)';
+    } else if (frameTheme === 'dark') {
+      cardBg = '#141721';
+      cardText = '#E2E8F0';
+      cardBorderColor = 'rgba(255, 255, 255, 0.08)';
+    } else if (frameTheme === 'match') {
+      cardBg = currentTheme.cardBg;
+      cardText = currentTheme.text;
+      cardBorderColor = currentTheme.border;
+    }
+
+    // 2. Rounded Corners (Radius)
+    let radiusClass = 'rounded-xl';
+    if (frameRadius === 'none') radiusClass = 'rounded-none';
+    else if (frameRadius === 'sm') radiusClass = 'rounded-md';
+    else if (frameRadius === 'md') radiusClass = 'rounded-xl';
+    else if (frameRadius === 'lg') radiusClass = 'rounded-2xl';
+    else if (frameRadius === 'xl') radiusClass = 'rounded-3xl';
+    else if (frameRadius === '2xl') radiusClass = 'rounded-[32px]';
+
+    // 3. Border style
+    let borderClass = 'border';
+    let borderStyle: React.CSSProperties = { borderColor: cardBorderColor };
+    if (frameBorder === 'none') {
+      borderClass = 'border-0';
+    } else if (frameBorder === 'thin') {
+      borderClass = 'border';
+    } else if (frameBorder === 'medium') {
+      borderClass = 'border-2';
+    } else if (frameBorder === 'double') {
+      borderClass = 'border-4 border-double';
+    } else if (frameBorder === 'ornament') {
+      borderClass = 'border';
+    }
+
+    // 4. Shadow depth
+    let shadowClass = 'shadow-md';
+    if (frameShadow === 'none') shadowClass = 'shadow-none';
+    else if (frameShadow === 'soft') shadowClass = 'shadow-sm';
+    else if (frameShadow === 'medium') shadowClass = 'shadow-md md:shadow-lg';
+    else if (frameShadow === 'deep') shadowClass = 'shadow-xl md:shadow-2xl';
+
+    // 5. Padding
+    let paddingClass = 'p-6 md:p-12';
+    if (framePadding === 'compact') paddingClass = 'p-4 md:p-8';
+    else if (framePadding === 'standard') paddingClass = 'p-6 md:p-12';
+    else if (framePadding === 'relaxed') paddingClass = 'p-8 md:p-16';
+
+    // Surround the app reader-canvas with a slightly different depth color to make card pop!
+    let outerStyle: React.CSSProperties = {};
+    const isThemeDark = isBgDark(currentTheme.bg);
+    if (isThemeDark) {
+      outerStyle.backgroundColor = '#0E1015'; // beautiful midnight background to frame card
+    } else {
+      outerStyle.backgroundColor = '#F0EDE8'; // soft stone-tabletop color to frame card
+    }
+
+    return {
+      cardClass: `${radiusClass} ${borderClass} ${shadowClass} ${paddingClass} mx-auto transition-all duration-300 relative select-text`,
+      cardStyle: {
+        backgroundColor: cardBg,
+        color: cardText,
+        borderColor: cardBorderColor,
+        ...borderStyle
+      },
+      outerStyle
+    };
+  };
+
+  const frameStyles = getFrameStyles();
 
   // --- FONT STYLE MAPS & LISTS ---
   const FONT_MAP: Record<string, string> = {
@@ -1147,6 +1292,104 @@ export default function App() {
       true, // isDanger
       "Clear Library",
       "Cancel"
+    );
+  };
+
+  const handleSaveAsDefault = () => {
+    localStorage.setItem('novel_default_profile_theme', theme);
+    localStorage.setItem('novel_default_profile_custom_bg', customBgColor);
+    localStorage.setItem('novel_default_profile_font_size', fontSize.toString());
+    localStorage.setItem('novel_default_profile_line_height', lineHeight.toString());
+    localStorage.setItem('novel_default_profile_paragraph_spacing', paragraphSpacing.toString());
+    localStorage.setItem('novel_default_profile_font_family', fontFamily);
+    localStorage.setItem('novel_default_profile_page_width', pageWidth);
+    localStorage.setItem('novel_default_profile_infinite_scroll', infiniteScroll.toString());
+    localStorage.setItem('novel_default_profile_frame_enabled', frameEnabled.toString());
+    localStorage.setItem('novel_default_profile_frame_theme', frameTheme);
+    localStorage.setItem('novel_default_profile_frame_radius', frameRadius);
+    localStorage.setItem('novel_default_profile_frame_border', frameBorder);
+    localStorage.setItem('novel_default_profile_frame_shadow', frameShadow);
+    localStorage.setItem('novel_default_profile_frame_padding', framePadding);
+    localStorage.setItem('novel_has_custom_defaults', 'true');
+    showCustomNotification("These settings are now saved as your custom default!", "success");
+  };
+
+  const handleRestoreDefaults = () => {
+    const hasCustom = localStorage.getItem('novel_has_custom_defaults') === 'true';
+    if (hasCustom) {
+      setTheme((localStorage.getItem('novel_default_profile_theme') as any) || 'dark');
+      setCustomBgColor(localStorage.getItem('novel_default_profile_custom_bg') || '#1E2128');
+      setFontSize(parseInt(localStorage.getItem('novel_default_profile_font_size') || '21', 10));
+      setLineHeight(parseFloat(localStorage.getItem('novel_default_profile_line_height') || '2.0'));
+      setParagraphSpacing(parseFloat(localStorage.getItem('novel_default_profile_paragraph_spacing') || '2.5'));
+      setFontFamily(localStorage.getItem('novel_default_profile_font_family') || 'Georgia');
+      setPageWidth((localStorage.getItem('novel_default_profile_page_width') as any) || 'narrow');
+      setInfiniteScroll(localStorage.getItem('novel_default_profile_infinite_scroll') !== 'false');
+      setFrameEnabled(localStorage.getItem('novel_default_profile_frame_enabled') === 'true');
+      setFrameTheme((localStorage.getItem('novel_default_profile_frame_theme') as any) || 'cream');
+      setFrameRadius((localStorage.getItem('novel_default_profile_frame_radius') as any) || 'lg');
+      setFrameBorder((localStorage.getItem('novel_default_profile_frame_border') as any) || 'thin');
+      setFrameShadow((localStorage.getItem('novel_default_profile_frame_shadow') as any) || 'medium');
+      setFramePadding((localStorage.getItem('novel_default_profile_frame_padding') as any) || 'standard');
+      showCustomNotification("Restored to your saved default configuration.", "success");
+    } else {
+      // Factory defaults
+      setTheme('dark');
+      setCustomBgColor('#1E2128');
+      setFontSize(21);
+      setLineHeight(2.0);
+      setParagraphSpacing(2.5);
+      setFontFamily('Georgia');
+      setPageWidth('narrow');
+      setInfiniteScroll(true);
+      setFrameEnabled(false);
+      setFrameTheme('cream');
+      setFrameRadius('lg');
+      setFrameBorder('thin');
+      setFrameShadow('medium');
+      setFramePadding('standard');
+      showCustomNotification("Reading settings restored to original factory defaults.", "success");
+    }
+  };
+
+  const handleResetToFactoryDefaults = () => {
+    showCustomConfirm(
+      "Reset to Factory",
+      "Are you sure you want to restore reading settings back to the original factory defaults?",
+      () => {
+        localStorage.removeItem('novel_has_custom_defaults');
+        localStorage.removeItem('novel_default_profile_theme');
+        localStorage.removeItem('novel_default_profile_custom_bg');
+        localStorage.removeItem('novel_default_profile_font_size');
+        localStorage.removeItem('novel_default_profile_line_height');
+        localStorage.removeItem('novel_default_profile_paragraph_spacing');
+        localStorage.removeItem('novel_default_profile_font_family');
+        localStorage.removeItem('novel_default_profile_page_width');
+        localStorage.removeItem('novel_default_profile_infinite_scroll');
+        localStorage.removeItem('novel_default_profile_frame_enabled');
+        localStorage.removeItem('novel_default_profile_frame_theme');
+        localStorage.removeItem('novel_default_profile_frame_radius');
+        localStorage.removeItem('novel_default_profile_frame_border');
+        localStorage.removeItem('novel_default_profile_frame_shadow');
+        localStorage.removeItem('novel_default_profile_frame_padding');
+
+        setTheme('dark');
+        setCustomBgColor('#1E2128');
+        setFontSize(21);
+        setLineHeight(2.0);
+        setParagraphSpacing(2.5);
+        setFontFamily('Georgia');
+        setPageWidth('narrow');
+        setInfiniteScroll(true);
+        setFrameEnabled(false);
+        setFrameTheme('cream');
+        setFrameRadius('lg');
+        setFrameBorder('thin');
+        setFrameShadow('medium');
+        setFramePadding('standard');
+        showCustomNotification("Restored to original factory defaults.", "success");
+      },
+      false
     );
   };
 
@@ -1756,7 +1999,12 @@ export default function App() {
       </div>
 
       {/* 2. MAIN READING FRAME */}
-      <div id="reader-frame" ref={readerFrameRef} className="flex-1 flex flex-col h-screen overflow-y-auto relative min-w-0">
+      <div 
+        id="reader-frame" 
+        ref={readerFrameRef} 
+        className="flex-1 flex flex-col h-screen overflow-y-auto relative min-w-0 transition-colors duration-300"
+        style={frameEnabled ? frameStyles.outerStyle : {}}
+      >
         
         {/* Floating Controls Overlay (Visible when not distraction free, or on hover/trigger) */}
         {!isDistractionFree && (
@@ -1823,6 +2071,20 @@ export default function App() {
                 <span className="text-xs font-bold">Aa</span>
               </button>
 
+              {/* Quick Book-Page Framing Toggle */}
+              <button 
+                id="quick-framing-toggle-btn"
+                onClick={() => setFrameEnabled(!frameEnabled)}
+                className={`p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center gap-1.5 text-sm font-semibold border border-transparent hover:border-current/10 ${
+                  frameEnabled ? 'bg-black/5 dark:bg-white/10' : ''
+                }`}
+                style={{ color: frameEnabled ? '#FF79B0' : currentTheme.secondaryText }}
+                title="Toggle Aesthetic Book-Page Framing (Kindle page sheet)"
+              >
+                <Book className="w-4.5 h-4.5" />
+                <span className="text-xs font-bold hidden sm:inline">Framing</span>
+              </button>
+
               {/* Distraction Free Mode */}
               <button 
                 id="distraction-free-btn"
@@ -1857,7 +2119,8 @@ export default function App() {
           id="reader-canvas"
           ref={readerContainerRef}
           onClick={handleCanvasClick}
-          className="flex-1 px-4 md:px-8 py-10 select-text outline-none relative"
+          className="flex-1 px-4 md:px-8 py-10 select-text outline-none relative transition-colors duration-300"
+          style={frameEnabled ? frameStyles.outerStyle : {}}
           onDoubleClick={() => setIsDistractionFree(!isDistractionFree)}
           title="Double click or tap 3 times to toggle Distraction-Free controls!"
         >
@@ -1900,16 +2163,21 @@ export default function App() {
                       id={`chap-article-${chap.id}`}
                       key={chap.id}
                       data-chapter-index={idx}
-                      className="chapter-article relative transition-all duration-300 mb-12"
+                      className={frameEnabled ? `${frameStyles.cardClass} mb-12` : "chapter-article relative transition-all duration-300 mb-12 select-text"}
                       aria-hidden={idx < currentChapterIndex ? "true" : undefined}
-                      style={{ 
-                        paddingBottom: `${activeParagraphSpacing}rem`
-                      }}
+                      style={frameEnabled ? { ...frameStyles.cardStyle, paddingBottom: `${activeParagraphSpacing}rem` } : { paddingBottom: `${activeParagraphSpacing}rem` }}
                     >
+                      {frameEnabled && frameBorder === 'ornament' && (
+                        <div 
+                          className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
+                          style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
+                        />
+                      )}
+
                       {/* Visual separator between chapters in Infinite Mode */}
                       {idx > 0 && (
                         <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
-                          <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: currentTheme.text }} />
+                          <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? (frameStyles.cardStyle.color || currentTheme.text) : currentTheme.text }} />
                           <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
                             {bookTitle}
                           </h2>
@@ -1931,7 +2199,7 @@ export default function App() {
                           className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
                           style={{ 
                             fontSize: `${activeFontSize * 1.15}px`,
-                            borderColor: currentTheme.border
+                            borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
                           }}
                         >
                           {chap.title}
@@ -1971,8 +2239,16 @@ export default function App() {
                 /* SINGLE CHAPTER RENDER BLOCK */
                 <article 
                   id="single-chapter-view" 
-                  className="relative transition-all duration-300"
+                  className={frameEnabled ? frameStyles.cardClass : "relative transition-all duration-300 select-text"}
+                  style={frameEnabled ? frameStyles.cardStyle : {}}
                 >
+                  {frameEnabled && frameBorder === 'ornament' && (
+                    <div 
+                      className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
+                      style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
+                    />
+                  )}
+
                   {/* Title */}
                   <div className="text-center select-none mb-4">
                     <h1 className="font-serif text-3xl md:text-4xl font-bold mb-2">{bookTitle}</h1>
@@ -1984,7 +2260,7 @@ export default function App() {
                       className="font-serif font-bold tracking-tight border-b pb-2" 
                       style={{ 
                         fontSize: `${activeFontSize * 1.2}px`,
-                        borderColor: currentTheme.border
+                        borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
                       {activeChapter.title}
@@ -2508,6 +2784,180 @@ export default function App() {
                     }`}
                   />
                 </button>
+              </div>
+
+              {/* SECTION 7: Aesthetic Book-Page Framing */}
+              <div className="space-y-3 pt-3 border-t border-white/5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Book-Page Framing</span>
+                    <span className="text-[10px] text-white/40">
+                      Wrap chapters in a premium book page sheet
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFrameEnabled(!frameEnabled)}
+                    className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
+                    style={{ 
+                      backgroundColor: frameEnabled ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                    }}
+                  >
+                    <div 
+                      className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
+                        frameEnabled ? 'translate-x-4.5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {frameEnabled && (
+                  <div className="space-y-4 p-3.5 rounded-2xl bg-white/5 border border-white/10 animate-fade-in text-xs">
+                    {/* Theme / Preset Selection */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Sheet Theme</span>
+                      <div className="grid grid-cols-5 gap-1">
+                        {(['cream', 'paper', 'amber', 'dark', 'match'] as const).map((t) => {
+                          const isSelected = frameTheme === t;
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setFrameTheme(t)}
+                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              }`}
+                            >
+                              {t}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Radius / Corners */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Corner Radius</span>
+                      <div className="grid grid-cols-6 gap-1">
+                        {(['none', 'sm', 'md', 'lg', 'xl', '2xl'] as const).map((r) => {
+                          const isSelected = frameRadius === r;
+                          return (
+                            <button
+                              key={r}
+                              type="button"
+                              onClick={() => setFrameRadius(r)}
+                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              }`}
+                            >
+                              {r}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Borders */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Sheet Border</span>
+                      <div className="grid grid-cols-5 gap-1">
+                        {(['none', 'thin', 'medium', 'double', 'ornament'] as const).map((b) => {
+                          const isSelected = frameBorder === b;
+                          return (
+                            <button
+                              key={b}
+                              type="button"
+                              onClick={() => setFrameBorder(b)}
+                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              }`}
+                              title={b === 'ornament' ? 'Adds a vintage dual inner border ring' : undefined}
+                            >
+                              {b}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Shadows */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Drop Shadow</span>
+                      <div className="grid grid-cols-4 gap-1">
+                        {(['none', 'soft', 'medium', 'deep'] as const).map((s) => {
+                          const isSelected = frameShadow === s;
+                          return (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={() => setFrameShadow(s)}
+                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              }`}
+                            >
+                              {s}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Padding / Margins */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Page Padding</span>
+                      <div className="grid grid-cols-3 gap-1">
+                        {(['compact', 'standard', 'relaxed'] as const).map((p) => {
+                          const isSelected = framePadding === p;
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => setFramePadding(p)}
+                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              }`}
+                            >
+                              {p}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION 8: Save Current Settings as Default */}
+              <div className="pt-4 border-t border-white/10 flex flex-col gap-2">
+                <button
+                  type="button"
+                  id="reset-reading-settings-btn"
+                  onClick={handleSaveAsDefault}
+                  className="w-full py-2.5 rounded-xl bg-[#FF79B0] hover:bg-[#FF79B0]/90 text-slate-900 font-bold text-xs uppercase tracking-wider transition-all border border-transparent flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-lg"
+                  title="Save your current theme, fonts, framing & scrolling configuration as your new default settings profile"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" />
+                  Save Settings as Default
+                </button>
+                <div className="flex items-center justify-between mt-1 px-1 text-[10px] text-white/40">
+                  <button
+                    type="button"
+                    onClick={handleRestoreDefaults}
+                    className="hover:underline hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Restore your reading appearance to your saved default settings"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    Load Default Settings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetToFactoryDefaults}
+                    className="hover:underline hover:text-[#FF79B0] transition-colors cursor-pointer"
+                    title="Wipe custom defaults and return to original factory dark theme settings"
+                  >
+                    Reset to Factory Defaults
+                  </button>
+                </div>
               </div>
 
 
