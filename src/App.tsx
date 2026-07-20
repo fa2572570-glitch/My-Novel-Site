@@ -28,7 +28,8 @@ import {
   Copy,
   Book,
   Layers,
-  Palette
+  Palette,
+  Headphones
 } from 'lucide-react';
 
 // Define Interface for Chapter
@@ -289,6 +290,14 @@ export default function App() {
     return def !== null ? def === 'true' : true;
   });
 
+  const [listenMode, setListenMode] = useState(() => {
+    const saved = localStorage.getItem('novel_listen_mode');
+    return saved === 'true';
+  });
+
+  const isInfiniteScrollingMode = infiniteScroll && !listenMode;
+  const useWindowScrolling = isInfiniteScrollingMode || listenMode;
+
   // --- AESTHETIC BOOK-PAGE FRAMING STATE ---
   const [frameEnabled, setFrameEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('novel_frame_enabled');
@@ -310,6 +319,12 @@ export default function App() {
   });
   const [framePadding, setFramePadding] = useState<'compact' | 'standard' | 'relaxed'>(() => {
     return (localStorage.getItem('novel_frame_padding') as any) || (localStorage.getItem('novel_default_profile_frame_padding') as any) || 'standard';
+  });
+  const [frameWidth, setFrameWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('novel_frame_width');
+    if (saved !== null) return parseInt(saved, 10);
+    const def = localStorage.getItem('novel_default_profile_frame_width');
+    return def !== null ? parseInt(def, 10) : 70;
   });
 
   // --- ADD / PASTE CHAPTER FORMS ---
@@ -487,6 +502,10 @@ export default function App() {
   }, [infiniteScroll]);
 
   useEffect(() => {
+    localStorage.setItem('novel_listen_mode', listenMode.toString());
+  }, [listenMode]);
+
+  useEffect(() => {
     localStorage.setItem('novel_frame_enabled', frameEnabled.toString());
   }, [frameEnabled]);
 
@@ -509,6 +528,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('novel_frame_padding', framePadding);
   }, [framePadding]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_frame_width', frameWidth.toString());
+  }, [frameWidth]);
 
   // Reset distraction-free click tracking when state changes
   useEffect(() => {
@@ -576,6 +599,14 @@ export default function App() {
 
   // Load last scroll position or scroll to top on chapter change
   useEffect(() => {
+    if (listenMode) {
+      window.scrollTo(0, 0);
+      if (readerFrameRef.current) {
+        readerFrameRef.current.scrollTo(0, 0);
+      }
+      return;
+    }
+
     if (infiniteScroll) {
       if (isScrollingFromObserver.current) {
         // Change was triggered by natural scrolling intersection observer - do NOT scroll/jump
@@ -602,11 +633,11 @@ export default function App() {
     } else if (readerFrameRef.current) {
       readerFrameRef.current.scrollTo(0, 0);
     }
-  }, [currentChapterIndex, infiniteScroll]);
+  }, [currentChapterIndex, infiniteScroll, listenMode]);
 
   // Restore saved overall infinite scroll position on mount
   useEffect(() => {
-    if (infiniteScroll) {
+    if (isInfiniteScrollingMode) {
       const savedInfiniteScroll = localStorage.getItem('scroll_pos_infinite');
       if (savedInfiniteScroll) {
         setTimeout(() => {
@@ -623,7 +654,8 @@ export default function App() {
   // Handle scroll tracking to auto-save position on appropriate scroll target
   useEffect(() => {
     const handleScroll = () => {
-      if (infiniteScroll) {
+      if (listenMode) return; // Don't track scrolling positions for individual pages in listenMode
+      if (isInfiniteScrollingMode) {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
         localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
       } else {
@@ -633,7 +665,7 @@ export default function App() {
       }
     };
 
-    if (infiniteScroll) {
+    if (useWindowScrolling) {
       window.addEventListener('scroll', handleScroll, { passive: true });
     } else {
       const frameEl = readerFrameRef.current;
@@ -648,7 +680,7 @@ export default function App() {
         readerFrameRef.current.removeEventListener('scroll', handleScroll);
       }
     };
-  }, [infiniteScroll]);
+  }, [useWindowScrolling, isInfiniteScrollingMode, listenMode]);
 
   // Track currentChapterIndex in ref to avoid recreating IntersectionObserver on every change (prevents flickering)
   const currentChapterIndexRef = useRef(currentChapterIndex);
@@ -658,7 +690,7 @@ export default function App() {
 
   // Setup IntersectionObserver for Infinite Scroll
   useEffect(() => {
-    if (!infiniteScroll || chapters.length === 0) return;
+    if (!useWindowScrolling || chapters.length === 0) return;
 
     if (infiniteObserverRef.current) {
       infiniteObserverRef.current.disconnect();
@@ -694,7 +726,7 @@ export default function App() {
     return () => {
       infiniteObserverRef.current?.disconnect();
     };
-  }, [infiniteScroll, chapters]); // Omitted currentChapterIndex dependency to stop re-registration loops/flicker
+  }, [useWindowScrolling, chapters]); // Omitted currentChapterIndex dependency to stop re-registration loops/flicker
 
   // Auto-scroll sidebar's active chapter item into view
   useEffect(() => {
@@ -1394,6 +1426,7 @@ export default function App() {
     localStorage.setItem('novel_default_profile_frame_border', frameBorder);
     localStorage.setItem('novel_default_profile_frame_shadow', frameShadow);
     localStorage.setItem('novel_default_profile_frame_padding', framePadding);
+    localStorage.setItem('novel_default_profile_frame_width', frameWidth.toString());
     localStorage.setItem('novel_has_custom_defaults', 'true');
     showCustomNotification("These settings are now saved as your custom default!", "success");
   };
@@ -1415,6 +1448,7 @@ export default function App() {
       setFrameBorder((localStorage.getItem('novel_default_profile_frame_border') as any) || 'thin');
       setFrameShadow((localStorage.getItem('novel_default_profile_frame_shadow') as any) || 'medium');
       setFramePadding((localStorage.getItem('novel_default_profile_frame_padding') as any) || 'standard');
+      setFrameWidth(parseInt(localStorage.getItem('novel_default_profile_frame_width') || '70', 10));
       showCustomNotification("Restored to your saved default configuration.", "success");
     } else {
       // Factory defaults
@@ -1432,6 +1466,7 @@ export default function App() {
       setFrameBorder('thin');
       setFrameShadow('medium');
       setFramePadding('standard');
+      setFrameWidth(70);
       showCustomNotification("Reading settings restored to original factory defaults.", "success");
     }
   };
@@ -1456,6 +1491,7 @@ export default function App() {
         localStorage.removeItem('novel_default_profile_frame_border');
         localStorage.removeItem('novel_default_profile_frame_shadow');
         localStorage.removeItem('novel_default_profile_frame_padding');
+        localStorage.removeItem('novel_default_profile_frame_width');
 
         setTheme('dark');
         setCustomBgColor('#1E2128');
@@ -1471,6 +1507,7 @@ export default function App() {
         setFrameBorder('thin');
         setFrameShadow('medium');
         setFramePadding('standard');
+        setFrameWidth(70);
         showCustomNotification("Restored to original factory defaults.", "success");
       },
       false
@@ -1498,7 +1535,7 @@ export default function App() {
     <div 
       id="app-container"
       className={`flex w-full transition-colors duration-300 select-none relative ${
-        infiniteScroll ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-hidden'
+        useWindowScrolling ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-hidden'
       }`}
       style={{ 
         backgroundColor: currentTheme.bg, 
@@ -1734,8 +1771,8 @@ export default function App() {
                 ) : (
                   <div id="chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
                     {filteredChapters.map((chap, index) => {
-                      const isSelected = !infiniteScroll && currentChapterIndex === index;
-                      const isHighlighted = infiniteScroll && currentChapterIndex === index;
+                      const isSelected = !isInfiniteScrollingMode && currentChapterIndex === index;
+                      const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === index;
                       const isChecked = selectedChapterIds.includes(chap.id);
                       return (
                         <div 
@@ -2089,7 +2126,7 @@ export default function App() {
         id="reader-frame" 
         ref={readerFrameRef} 
         className={`flex-1 flex flex-col relative min-w-0 transition-all duration-300 ${
-          infiniteScroll ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-y-auto'
+          useWindowScrolling ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-y-auto overflow-x-hidden'
         } ${isSidebarOpen ? 'md:pl-80' : 'md:pl-0'}`}
         style={frameEnabled ? frameStyles.outerStyle : {}}
       >
@@ -2120,7 +2157,7 @@ export default function App() {
                 <span className="font-serif font-semibold text-sm md:text-base truncate opacity-90">
                   {activeChapter ? activeChapter.title : bookTitle}
                 </span>
-                {infiniteScroll && (
+                {!listenMode && infiniteScroll && (
                   <span className="hidden sm:inline-block text-[10px] px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/10 uppercase tracking-wider font-semibold opacity-75">
                     Infinite Mode
                   </span>
@@ -2128,7 +2165,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Right side: Search, Sidebar Quick link, Aa / Settings, and Distraction-free */}
+            {/* Right side: Search and Aa / Settings */}
             <div className="flex items-center gap-1.5 flex-shrink-0">
               {/* Search Toggle */}
               <button 
@@ -2156,32 +2193,6 @@ export default function App() {
                 title="Adjust Text, Theme, and Layout Settings"
               >
                 <Settings className="w-4.5 h-4.5" />
-                <span className="text-xs font-bold">Aa</span>
-              </button>
-
-              {/* Quick Book-Page Framing Toggle */}
-              <button 
-                id="quick-framing-toggle-btn"
-                onClick={() => setFrameEnabled(!frameEnabled)}
-                className={`p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center gap-1.5 text-sm font-semibold border border-transparent hover:border-current/10 ${
-                  frameEnabled ? 'bg-black/5 dark:bg-white/10' : ''
-                }`}
-                style={{ color: frameEnabled ? '#FF79B0' : currentTheme.secondaryText }}
-                title="Toggle Aesthetic Book-Page Framing (Kindle page sheet)"
-              >
-                <Book className="w-4.5 h-4.5" />
-                <span className="text-xs font-bold hidden sm:inline">Framing</span>
-              </button>
-
-              {/* Distraction Free Mode */}
-              <button 
-                id="distraction-free-btn"
-                onClick={() => setIsDistractionFree(true)}
-                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors text-xs flex items-center gap-1 font-semibold"
-                title="Distraction-Free Mode (Double click content to exit)"
-              >
-                <EyeOff className="w-4.5 h-4.5" />
-                <span className="hidden md:inline">Distraction-Free</span>
               </button>
             </div>
           </header>
@@ -2241,87 +2252,98 @@ export default function App() {
           ) : (
             <div 
               id="reader-content-width-wrapper"
-              className={`mx-auto transition-all duration-300 ${currentWidthClass}`}
+              className={`transition-all duration-300 ${frameEnabled ? '' : 'mx-auto ' + currentWidthClass}`}
+              style={frameEnabled ? { 
+                width: `${frameWidth}%`, 
+                marginLeft: `calc(50% - ${frameWidth / 2}%)`, 
+                marginRight: `calc(50% - ${frameWidth / 2}%)` 
+              } : {}}
             >
               {/* INFINITE SCROLL RENDER BLOCK */}
-              {infiniteScroll ? (
+              {useWindowScrolling ? (
                 <div id="infinite-scroll-container" className="space-y-0">
-                  {chapters.map((chap, idx) => (
-                    <article 
-                      id={`chap-article-${chap.id}`}
-                      key={chap.id}
-                      data-chapter-index={idx}
-                      className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
-                      aria-hidden={idx < currentChapterIndex ? "true" : undefined}
-                      style={{
-                        ...(frameEnabled ? frameStyles.cardStyle : {}),
-                        paddingBottom: `${activeParagraphSpacing}rem`
-                      }}
-                    >
-                      {frameEnabled && frameBorder === 'ornament' && (
-                        <div 
-                          className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
-                          style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
-                        />
-                      )}
-
-                      {/* Visual separator between chapters in Infinite Mode */}
-                      {idx > 0 && (
-                        <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
-                          <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? (frameStyles.cardStyle.color || currentTheme.text) : currentTheme.text }} />
-                          <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
-                            {bookTitle}
-                          </h2>
-                          <hr className="w-1/12 mx-auto opacity-20 mt-4" style={{ borderColor: currentTheme.accent }} />
-                        </div>
-                      )}
-
-                      {/* Header for the first chapter in the list */}
-                      {idx === 0 && (
-                        <div id="first-chapter-header" className="text-center pb-8 select-none">
-                          <h1 className="font-serif text-4xl md:text-5xl font-bold mb-4 tracking-tight">{bookTitle}</h1>
-                          <hr className="w-1/12 mx-auto opacity-20 mb-8" style={{ borderColor: currentTheme.accent }} />
-                        </div>
-                      )}
-
-                      {/* Chapter Title block */}
-                      <div className="mb-10 text-left">
-                        <h3 
-                          className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
-                          style={{ 
-                            fontSize: `${activeFontSize * 1.15}px`,
-                            borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
-                          }}
-                        >
-                          {chap.title}
-                        </h3>
-                      </div>
-
-                      {/* Chapter Content Paragraphs */}
-                      <div 
-                        className="select-text transition-all duration-300 columns-1" 
-                        style={{ 
-                          fontFamily: FONT_MAP[fontFamily],
-                          textAlign: isLandscape ? 'justify' : 'left'
+                  {(listenMode ? chapters.slice(currentChapterIndex) : chapters).map((chap) => {
+                    const idx = chapters.findIndex(c => c.id === chap.id);
+                    const isFirstRendered = listenMode 
+                      ? chap.id === chapters[currentChapterIndex]?.id 
+                      : idx === 0;
+                    return (
+                      <article 
+                        id={`chap-article-${chap.id}`}
+                        key={chap.id}
+                        data-chapter-index={idx}
+                        className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
+                        aria-hidden={idx < currentChapterIndex ? "true" : undefined}
+                        style={{
+                          ...(frameEnabled ? frameStyles.cardStyle : {}),
+                          paddingBottom: `${activeParagraphSpacing}rem`
                         }}
                       >
-                        {chap.content.map((para, pIdx) => (
-                          <p 
-                            id={`chap-${chap.id}-p-${pIdx}`}
-                            key={pIdx} 
-                            className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
+                        {frameEnabled && frameBorder === 'ornament' && (
+                          <div 
+                            className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
+                            style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
+                          />
+                        )}
+
+                        {/* Visual separator between chapters in Infinite Mode */}
+                        {!isFirstRendered && (
+                          <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
+                            <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? (frameStyles.cardStyle.color || currentTheme.text) : currentTheme.text }} />
+                            <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
+                              {bookTitle}
+                            </h2>
+                            <hr className="w-1/12 mx-auto opacity-20 mt-4" style={{ borderColor: currentTheme.accent }} />
+                          </div>
+                        )}
+
+                        {/* Header for the first chapter in the list */}
+                        {isFirstRendered && (
+                          <div id="first-chapter-header" className="text-center pb-8 select-none">
+                            <h1 className="font-serif text-4xl md:text-5xl font-bold mb-4 tracking-tight">{bookTitle}</h1>
+                            <hr className="w-1/12 mx-auto opacity-20 mb-8" style={{ borderColor: currentTheme.accent }} />
+                          </div>
+                        )}
+
+                        {/* Chapter Title block */}
+                        <div className="mb-10 text-left">
+                          <h3 
+                            className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
                             style={{ 
-                              fontSize: `${activeFontSize}px`, 
-                              lineHeight: activeLineHeight,
-                              marginBottom: `${activeParagraphSpacing}rem`
+                              fontSize: `${activeFontSize * 1.15}px`,
+                              borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
                             }}
                           >
-                            {para}
-                          </p>
-                        ))}
-                      </div>
-                    </article>
-                  ))}
+                            {chap.title}
+                          </h3>
+                        </div>
+
+                        {/* Chapter Content Paragraphs */}
+                        <div 
+                          className="select-text transition-all duration-300 columns-1" 
+                          style={{ 
+                            fontFamily: FONT_MAP[fontFamily],
+                            textAlign: isLandscape ? 'justify' : 'left'
+                          }}
+                        >
+                          {chap.content.map((para, pIdx) => (
+                            <p 
+                              id={`chap-${chap.id}-p-${pIdx}`}
+                              key={pIdx} 
+                              className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
+                              style={{ 
+                                fontSize: `${activeFontSize}px`, 
+                                lineHeight: activeLineHeight,
+                                marginBottom: `${activeParagraphSpacing}rem`
+                              }}
+                            >
+                              {para}
+                            </p>
+                          ))}
+                        </div>
+                      </article>
+                    );
+                  })}
                   <div ref={chaptersEndRef} className="text-center py-12 select-none" style={{ color: currentTheme.secondaryText }}>
                     <p className="text-xs font-mono uppercase tracking-widest">End of Library • Add more chapters in Sidebar</p>
                   </div>
@@ -2877,6 +2899,56 @@ export default function App() {
                 </button>
               </div>
 
+              {/* SECTION 6.5: Listen Mode */}
+              <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                <div>
+                  <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Listen Mode</span>
+                  <span className="text-[10px] text-white/40">
+                    Optimized for Edge's "Listen to this page"
+                  </span>
+                </div>
+                <button
+                  id="settings-listen-mode-btn"
+                  type="button"
+                  onClick={() => setListenMode(!listenMode)}
+                  className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
+                  style={{ 
+                    backgroundColor: listenMode ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                  }}
+                >
+                  <div 
+                    className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
+                      listenMode ? 'translate-x-4.5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* SECTION 6.6: Distraction-Free Mode */}
+              <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                <div>
+                  <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Distraction-Free Mode</span>
+                  <span className="text-[10px] text-white/40">
+                    Hide header controls while reading
+                  </span>
+                </div>
+                <button
+                  id="settings-distraction-free-btn"
+                  type="button"
+                  onClick={() => setIsDistractionFree(!isDistractionFree)}
+                  className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
+                  style={{ 
+                    backgroundColor: isDistractionFree ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                  }}
+                >
+                  <div 
+                    className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
+                      isDistractionFree ? 'translate-x-4.5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
               {/* SECTION 7: Aesthetic Book-Page Framing */}
               <div className="space-y-3 pt-3 border-t border-white/5">
                 <div className="flex items-center justify-between">
@@ -2904,6 +2976,41 @@ export default function App() {
 
                 {frameEnabled && (
                   <div className="space-y-4 p-3.5 rounded-2xl bg-white/5 border border-white/10 animate-fade-in text-xs">
+                    {/* Sheet Width Slider */}
+                    <div className="space-y-2 pb-2 border-b border-white/5">
+                      <div className="flex justify-between items-center text-[10px] text-white/50 uppercase font-bold tracking-wider">
+                        <span>Sheet Width</span>
+                        <span className="text-[#FF79B0] font-mono text-xs">{frameWidth}%</span>
+                      </div>
+                      <input 
+                        id="settings-frame-width-slider"
+                        type="range"
+                        min="70"
+                        max="105"
+                        step="5"
+                        value={frameWidth}
+                        onChange={(e) => setFrameWidth(parseInt(e.target.value, 10))}
+                        className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#FF79B0]"
+                      />
+                      <div className="grid grid-cols-6 gap-0.5 text-center mt-1">
+                        {([70, 80, 90, 95, 100, 105] as const).map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => setFrameWidth(w)}
+                            className={`py-0.5 rounded text-[8px] font-bold transition-all border ${
+                              frameWidth === w 
+                                ? 'bg-[#FF79B0]/20 text-[#FF79B0] border-[#FF79B0]/40' 
+                                : 'text-white/40 border-transparent hover:text-white hover:bg-white/5'
+                            }`}
+                            title={w === 70 ? 'Narrow book page' : w === 100 ? 'Standard full' : undefined}
+                          >
+                            {w}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     {/* Theme / Preset Selection */}
                     <div className="space-y-1.5">
                       <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Sheet Theme</span>
