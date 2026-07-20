@@ -193,6 +193,16 @@ export default function App() {
   });
 
   const [currentChapterIndex, setCurrentChapterIndex] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlChap = params.get('chapter');
+      if (urlChap) {
+        const parsed = parseInt(urlChap, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          return parsed - 1;
+        }
+      }
+    }
     const saved = localStorage.getItem('novel_current_index');
     return saved ? parseInt(saved, 10) : 0;
   });
@@ -507,6 +517,62 @@ export default function App() {
       setDfClickCount(0);
     }
   }, [isDistractionFree]);
+
+  // Update document title, browser history URL, and page metadata for the current active chapter
+  useEffect(() => {
+    if (chapters.length === 0) return;
+    const activeChap = chapters[currentChapterIndex];
+    if (!activeChap) return;
+
+    // 1. Update document title
+    const pageTitle = `${activeChap.title} - ${bookTitle}`;
+    document.title = pageTitle;
+
+    // 2. Update metadata (description and OpenGraph)
+    let metaDesc = document.querySelector('meta[name="description"]');
+    if (!metaDesc) {
+      metaDesc = document.createElement('meta');
+      metaDesc.setAttribute('name', 'description');
+      document.head.appendChild(metaDesc);
+    }
+    const excerpt = activeChap.content && activeChap.content[0]
+      ? activeChap.content[0].substring(0, 150) + '...'
+      : `Read ${activeChap.title} from ${bookTitle}`;
+    metaDesc.setAttribute('content', excerpt);
+
+    let ogTitle = document.querySelector('meta[property="og:title"]');
+    if (!ogTitle) {
+      ogTitle = document.createElement('meta');
+      ogTitle.setAttribute('property', 'og:title');
+      document.head.appendChild(ogTitle);
+    }
+    ogTitle.setAttribute('content', pageTitle);
+
+    let ogDesc = document.querySelector('meta[property="og:description"]');
+    if (!ogDesc) {
+      ogDesc = document.createElement('meta');
+      ogDesc.setAttribute('property', 'og:description');
+      document.head.appendChild(ogDesc);
+    }
+    ogDesc.setAttribute('content', excerpt);
+
+    let canonicalLink = document.querySelector('link[rel="canonical"]');
+    if (!canonicalLink) {
+      canonicalLink = document.createElement('link');
+      canonicalLink.setAttribute('rel', 'canonical');
+      document.head.appendChild(canonicalLink);
+    }
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.set('chapter', (currentChapterIndex + 1).toString());
+    canonicalLink.setAttribute('href', currentUrl.toString());
+
+    // 3. Update browser history state to reflect the current active chapter
+    window.history.replaceState(
+      { chapterIndex: currentChapterIndex },
+      pageTitle,
+      `?chapter=${currentChapterIndex + 1}`
+    );
+  }, [currentChapterIndex, chapters, bookTitle]);
 
   // Load last scroll position or scroll to top on chapter change
   useEffect(() => {
@@ -2186,6 +2252,7 @@ export default function App() {
                       key={chap.id}
                       data-chapter-index={idx}
                       className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
+                      aria-hidden={idx < currentChapterIndex ? "true" : undefined}
                       style={{
                         ...(frameEnabled ? frameStyles.cardStyle : {}),
                         paddingBottom: `${activeParagraphSpacing}rem`
