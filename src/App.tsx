@@ -409,6 +409,7 @@ export default function App() {
 
   // --- LOCAL STATE / FLAGS ---
   const isScrollingFromObserver = useRef(false);
+  const isProgrammaticScrolling = useRef(false);
 
   // --- LOCAL PERSISTENCE AUTOSAVE ---
   useEffect(() => {
@@ -518,7 +519,12 @@ export default function App() {
       // Jump/snap to targeted chapter article if triggered explicitly
       const targetElement = document.getElementById(`chap-article-${chapters[currentChapterIndex]?.id}`);
       if (targetElement) {
+        isProgrammaticScrolling.current = true;
         targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+        // Release programmatic scrolling lock once DOM has settled
+        setTimeout(() => {
+          isProgrammaticScrolling.current = false;
+        }, 500);
       }
       return;
     }
@@ -538,33 +544,42 @@ export default function App() {
       const savedInfiniteScroll = localStorage.getItem('scroll_pos_infinite');
       if (savedInfiniteScroll) {
         setTimeout(() => {
-          if (readerFrameRef.current) {
-            readerFrameRef.current.scrollTo(0, parseInt(savedInfiniteScroll, 10));
-          }
+          isProgrammaticScrolling.current = true;
+          window.scrollTo(0, parseInt(savedInfiniteScroll, 10));
+          setTimeout(() => {
+            isProgrammaticScrolling.current = false;
+          }, 500);
         }, 100);
       }
     }
   }, []);
 
-  // Handle scroll tracking to auto-save position on reader-frame scroll
+  // Handle scroll tracking to auto-save position on appropriate scroll target
   useEffect(() => {
     const handleScroll = () => {
-      if (!readerFrameRef.current) return;
-      const scrollTop = readerFrameRef.current.scrollTop;
       if (infiniteScroll) {
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
         localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
       } else {
+        if (!readerFrameRef.current) return;
+        const scrollTop = readerFrameRef.current.scrollTop;
         localStorage.setItem(`scroll_pos_${currentChapterIndexRef.current}`, scrollTop.toString());
       }
     };
 
-    const frameEl = readerFrameRef.current;
-    if (frameEl) {
-      frameEl.addEventListener('scroll', handleScroll, { passive: true });
-    }
-    return () => {
+    if (infiniteScroll) {
+      window.addEventListener('scroll', handleScroll, { passive: true });
+    } else {
+      const frameEl = readerFrameRef.current;
       if (frameEl) {
-        frameEl.removeEventListener('scroll', handleScroll);
+        frameEl.addEventListener('scroll', handleScroll, { passive: true });
+      }
+    }
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (readerFrameRef.current) {
+        readerFrameRef.current.removeEventListener('scroll', handleScroll);
       }
     };
   }, [infiniteScroll]);
@@ -584,6 +599,9 @@ export default function App() {
     }
 
     infiniteObserverRef.current = new IntersectionObserver((entries) => {
+      if (isProgrammaticScrolling.current) {
+        return; // Ignore intersection transitions during programmatic jumps
+      }
       entries.forEach(entry => {
         if (entry.isIntersecting) {
           const indexAttr = entry.target.getAttribute('data-chapter-index');
@@ -597,8 +615,8 @@ export default function App() {
         }
       });
     }, {
-      root: readerFrameRef.current, // Use our scroll container as the root instead of null (browser viewport) for absolute reliability
-      rootMargin: '-10% 0px -40% 0px' // Trigger active index change when chapter is centered in viewport, robust for landscape
+      root: null, // Use our browser viewport for full-page window scrolling in Infinity Mode
+      rootMargin: '-15% 0px -45% 0px' // Trigger active index change when chapter is centered in viewport, robust for landscape
     });
 
     // Observe all chapter articles
@@ -1413,7 +1431,9 @@ export default function App() {
   return (
     <div 
       id="app-container"
-      className="flex h-screen w-full overflow-hidden transition-colors duration-300 select-none relative"
+      className={`flex w-full transition-colors duration-300 select-none relative ${
+        infiniteScroll ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-hidden'
+      }`}
       style={{ 
         backgroundColor: currentTheme.bg, 
         color: currentTheme.text,
@@ -1433,10 +1453,10 @@ export default function App() {
       {/* 1. SIDEBAR (Collapsible table of contents, search, import/export) */}
       <div 
         id="app-sidebar"
-        className={`fixed md:sticky top-0 left-0 h-screen flex-shrink-0 border-r transition-all duration-300 flex flex-col overflow-hidden z-40 ${
+        className={`fixed top-0 left-0 h-screen flex-shrink-0 border-r transition-all duration-300 flex flex-col overflow-hidden z-40 ${
           isSidebarOpen 
-            ? 'w-80 opacity-100 translate-x-0 shadow-2xl md:shadow-none' 
-            : 'w-0 opacity-0 pointer-events-none -translate-x-full md:translate-x-0'
+            ? 'w-80 opacity-100 translate-x-0 shadow-2xl' 
+            : 'w-0 opacity-0 pointer-events-none -translate-x-full'
         }`}
         style={{ 
           borderColor: currentTheme.border,
@@ -2002,7 +2022,9 @@ export default function App() {
       <div 
         id="reader-frame" 
         ref={readerFrameRef} 
-        className="flex-1 flex flex-col h-screen overflow-y-auto relative min-w-0 transition-colors duration-300"
+        className={`flex-1 flex flex-col relative min-w-0 transition-all duration-300 ${
+          infiniteScroll ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-y-auto'
+        } ${isSidebarOpen ? 'md:pl-80' : 'md:pl-0'}`}
         style={frameEnabled ? frameStyles.outerStyle : {}}
       >
         
@@ -2163,8 +2185,7 @@ export default function App() {
                       id={`chap-article-${chap.id}`}
                       key={chap.id}
                       data-chapter-index={idx}
-                      className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12` : "chapter-article relative transition-all duration-300 mb-12 select-text"}
-                      aria-hidden={idx < currentChapterIndex ? "true" : undefined}
+                      className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
                       style={{
                         ...(frameEnabled ? frameStyles.cardStyle : {}),
                         paddingBottom: `${activeParagraphSpacing}rem`
