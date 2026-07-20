@@ -37,47 +37,8 @@ interface Chapter {
   url?: string;
 }
 
-// Initial default chapters to match screenshots exactly and show immediate content
-const DEFAULT_CHAPTERS: Chapter[] = [
-  {
-    id: "chap-171",
-    number: 171,
-    title: "Chapter 171: A Fork in History",
-    content: [
-      "The figure was tall, taller even than Inquisitor Vanna by the look of it. It was terribly thin, as if the heavy black coat wrapped nothing more than a strip of dried flesh. Indoors, beneath that broad black umbrella, the intruder kept its face hidden under the lowered canopy.",
-      "But one glance was enough. The old priest could see the twisted, blasphemous shadows coiling around that body.",
-      "“Dregs of the black sun?” the old man barked, staring at the figure in fury and disbelief. “You dare set foot in this sacred archive?”",
-      "The gunshot shattered the silence. The old priest had already ripped the large-caliber revolver from his waist. The blessed bullet roared forward in fire and thunder – but his body was too slow. Before the shot had even fully gone off, the figure had already moved. Two phantom shapes shot out from beneath the hem of its coat. The first intercepted the bullet in midair.",
-      "The second crossed ten full meters in an instant and lashed the old priest across the shoulder. Metal screamed. The old priest’s body flew sideways and slammed into a nearby shelf. The massive structure shuddered, and books and files rained down in a crash. The strange black figure stepped forward, moving toward where the old priest had fallen. A low, chaotic murmur came from within."
-    ]
-  },
-  {
-    id: "chap-172",
-    number: 172,
-    title: "Chapter 172: Vanna’s Discovery",
-    content: [
-      "Vanna stood silently at the top of the stairs leading down to the underground sanctum, staring at the black door that had just restored itself before everyone’s eyes. Three hours ago, she had led her team into this abandoned cathedral. Inside, they had found warm, steady lamplight, a main hall that looked perfectly normal, a nun quietly at prayer, and a spotless pulpit.",
-      "Two hours ago, she had shaken off that obviously abnormal nun, searching the chambers with her consecrated lantern. But the underground sanctum sprang into sharp relief. The slashes on the walls, the bullet scars, the gouges left by desperate steel – they looked like words written over and over by time itself, as if the sealed space had been trying to tell her something all along.",
-      "[Words?]",
-      "Vanna’s brows drew together. A flash of insight cut through her thoughts. If the nun who died in the underground sanctum had already foreseen her own fate when she sealed the door, then before she died, would she have tried to leave something behind? A record. A warning. Anything for whoever came after. That was exactly what a well-trained cleric would do.",
-      "“Search the place again,” she snapped, looking up at the warriors around her. “Everything. Sword marks, bullet scars, bloodstains – all of it. This sister may have left us a message before she died.”",
-      "“Yes!”",
-      "The guardians moved at once. Holding their consecrated lanterns high, they fanned out through the underground sanctum, searching the already-inspected chamber with far more care than before. Vanna did not waste a second either. The moment the idea took hold, she returned to the spot where the nun had fallen – back to the entrance of the underground sanctum – and began carefully examining the ground and walls around the door.",
-      "She had shattered the sanctuary doors herself moments ago, but she did not think the message would be there. Those doors were part of a finely wrought seal, engraved with the goddess’s holy symbols. Damaging them would have weakened the protection of the sanctum. A nun would never have chosen that spot. The sword-bearing nun still lay where she had fallen, blood slowly spreading beneath her, cooling as it ran. As if guided by a powerful will, it crept soundlessly across the floor, gathering itself into a trail of footprints that stretched toward the administrator console..."
-    ]
-  },
-  {
-    id: "chap-173",
-    number: 173,
-    title: "Chapter 173: The Fire Is Spreading",
-    content: [
-      "Subspace corruption did not fade on its own, any more than justice upheld itself on its own. After years of fighting the twisted shadows in the world’s deep layers, Vanna knew that better than anyone. If this cathedral had once been corrupted by subspace, and the nun stationed here had already been defeated by that corruption, then whatever had invaded the place would never have conveniently perished on its own. The strange echo of the nun in the main hall, the wrongness hanging over the entire Sixth District... all of it pointed to the same conclusion. The great door of the underground sanctum had failed to keep the intruder out. So where had that invading force gone?",
-      "Vanna raised the consecrated lantern in her hand. Holy, whale-oil powered flames licked against the dark glass, casting warm amber shadows across the wet floor.",
-      "She swept her gaze across the underground sanctum.",
-      "“If subspace really did corrupt this place... where did it go?”"
-    ]
-  }
-];
+// Initial default chapters - now empty by default so chapters only appear when fetched or added manually
+const DEFAULT_CHAPTERS: Chapter[] = [];
 
 // Helper function to clean and filter a list of paragraphs to remove comment sections, form fields, and boilerplate
 const cleanChapterParagraphs = (paragraphs: string[]): string[] => {
@@ -296,6 +257,12 @@ export default function App() {
   const [pageWidth, setPageWidth] = useState<'narrow' | 'medium' | 'wide' | 'full'>(() => {
     return (localStorage.getItem('novel_page_width') as any) || 'narrow';
   });
+  const [isLandscape, setIsLandscape] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.matchMedia('(orientation: landscape)').matches;
+    }
+    return false;
+  });
   const [infiniteScroll, setInfiniteScroll] = useState(() => {
     const saved = localStorage.getItem('novel_infinite_scroll');
     return saved !== null ? saved === 'true' : true;
@@ -311,8 +278,8 @@ export default function App() {
   const [pasteCustomDelimiter, setPasteCustomDelimiter] = useState('---');
 
   // --- SMART URL SCRAPER RANGE STATE ---
-  const [startUrl, setStartUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-171/');
-  const [endUrl, setEndUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-173/');
+  const [startUrl, setStartUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-1/');
+  const [endUrl, setEndUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-3/');
   const [scrapingQueue, setScrapingQueue] = useState<{ number: number; url: string; status: 'idle' | 'fetching' | 'completed' | 'failed'; error?: string; title?: string }[]>([]);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeProgressIndex, setScrapeProgressIndex] = useState(0);
@@ -402,6 +369,7 @@ export default function App() {
 
   // --- ELEMENT REFS ---
   const readerContainerRef = useRef<HTMLDivElement>(null);
+  const readerFrameRef = useRef<HTMLDivElement>(null);
   const chaptersEndRef = useRef<HTMLDivElement>(null);
   const infiniteObserverRef = useRef<IntersectionObserver | null>(null);
 
@@ -450,6 +418,26 @@ export default function App() {
   }, [pageWidth]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(orientation: landscape)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsLandscape(e.matches);
+    };
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+    } else {
+      mediaQuery.addListener(handleChange);
+    }
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('novel_infinite_scroll', infiniteScroll.toString());
   }, [infiniteScroll]);
 
@@ -471,46 +459,57 @@ export default function App() {
       }
       // Jump/snap to targeted chapter article if triggered explicitly
       const targetElement = document.getElementById(`chap-article-${chapters[currentChapterIndex]?.id}`);
-      if (targetElement && readerContainerRef.current) {
+      if (targetElement) {
         targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
       }
       return;
     }
 
-    // Single chapter mode: standard scroll restore or scroll to top
+    // Single chapter mode: standard scroll restore or scroll to top inside readerFrameRef
     const savedScrollY = localStorage.getItem(`scroll_pos_${currentChapterIndex}`);
-    if (savedScrollY && readerContainerRef.current) {
-      readerContainerRef.current.scrollTop = parseInt(savedScrollY, 10);
-    } else if (readerContainerRef.current) {
-      readerContainerRef.current.scrollTop = 0;
+    if (savedScrollY && readerFrameRef.current) {
+      readerFrameRef.current.scrollTo(0, parseInt(savedScrollY, 10));
+    } else if (readerFrameRef.current) {
+      readerFrameRef.current.scrollTo(0, 0);
     }
   }, [currentChapterIndex, infiniteScroll]);
 
   // Restore saved overall infinite scroll position on mount
   useEffect(() => {
-    if (infiniteScroll && readerContainerRef.current) {
+    if (infiniteScroll) {
       const savedInfiniteScroll = localStorage.getItem('scroll_pos_infinite');
       if (savedInfiniteScroll) {
         setTimeout(() => {
-          if (readerContainerRef.current) {
-            readerContainerRef.current.scrollTop = parseInt(savedInfiniteScroll, 10);
+          if (readerFrameRef.current) {
+            readerFrameRef.current.scrollTo(0, parseInt(savedInfiniteScroll, 10));
           }
         }, 100);
       }
     }
   }, []);
 
-  // Handle scroll tracking to auto-save position
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
-    if (target) {
+  // Handle scroll tracking to auto-save position on reader-frame scroll
+  useEffect(() => {
+    const handleScroll = () => {
+      if (!readerFrameRef.current) return;
+      const scrollTop = readerFrameRef.current.scrollTop;
       if (infiniteScroll) {
-        localStorage.setItem(`scroll_pos_infinite`, target.scrollTop.toString());
+        localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
       } else {
-        localStorage.setItem(`scroll_pos_${currentChapterIndex}`, target.scrollTop.toString());
+        localStorage.setItem(`scroll_pos_${currentChapterIndexRef.current}`, scrollTop.toString());
       }
+    };
+
+    const frameEl = readerFrameRef.current;
+    if (frameEl) {
+      frameEl.addEventListener('scroll', handleScroll, { passive: true });
     }
-  };
+    return () => {
+      if (frameEl) {
+        frameEl.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, [infiniteScroll]);
 
   // Track currentChapterIndex in ref to avoid recreating IntersectionObserver on every change (prevents flickering)
   const currentChapterIndexRef = useRef(currentChapterIndex);
@@ -540,8 +539,8 @@ export default function App() {
         }
       });
     }, {
-      root: readerContainerRef.current,
-      rootMargin: '-20% 0px -60% 0px' // Trigger active index change when chapter is centered in viewport
+      root: readerFrameRef.current, // Use our scroll container as the root instead of null (browser viewport) for absolute reliability
+      rootMargin: '-10% 0px -40% 0px' // Trigger active index change when chapter is centered in viewport, robust for landscape
     });
 
     // Observe all chapter articles
@@ -554,6 +553,17 @@ export default function App() {
       infiniteObserverRef.current?.disconnect();
     };
   }, [infiniteScroll, chapters]); // Omitted currentChapterIndex dependency to stop re-registration loops/flicker
+
+  // Auto-scroll sidebar's active chapter item into view
+  useEffect(() => {
+    const activeChap = chapters[currentChapterIndex];
+    if (activeChap) {
+      const sidebarItem = document.getElementById(`chapter-item-${activeChap.id}`);
+      if (sidebarItem) {
+        sidebarItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [currentChapterIndex, chapters]);
 
   // --- THEME COLOR MAPS ---
   const isBgDark = (bgColor: string) => {
@@ -1125,17 +1135,17 @@ export default function App() {
 
   const handleResetLibrary = () => {
     showCustomConfirm(
-      "Reset Library",
-      "Are you sure you want to reset your library to the default 'Deep Sea Embers' chapters? This will overwrite all your custom and scraped chapters.",
+      "Clear Library",
+      "Are you sure you want to clear your library? This will delete all your custom and scraped chapters.",
       () => {
         setChapters(DEFAULT_CHAPTERS);
         setBookTitle("Deep Sea Embers");
         setCurrentChapterIndex(0);
         localStorage.removeItem('novel_current_index');
-        showCustomNotification("Library reset to defaults.", "success");
+        showCustomNotification("Library cleared successfully.", "success");
       },
       true, // isDanger
-      "Reset Library",
+      "Clear Library",
       "Cancel"
     );
   };
@@ -1148,10 +1158,19 @@ export default function App() {
 
   const activeChapter = chapters[currentChapterIndex] || null;
 
+  // Premium automated adjustments when reading in landscape mode on a tablet/desktop
+  const activeFontSize = isLandscape ? fontSize + 1 : fontSize;
+  const activeLineHeight = isLandscape ? Math.min(lineHeight * 1.05, 2.3) : lineHeight;
+  const activeParagraphSpacing = isLandscape ? paragraphSpacing * 1.08 : paragraphSpacing;
+
+  const currentWidthClass = isLandscape
+    ? (pageWidth === 'narrow' ? 'max-w-[780px]' : pageWidth === 'medium' ? 'max-w-[920px]' : pageWidth === 'wide' ? 'max-w-[1060px]' : 'max-w-full px-12 md:px-24')
+    : (pageWidth === 'narrow' ? 'max-w-[720px]' : pageWidth === 'medium' ? 'max-w-[880px]' : pageWidth === 'wide' ? 'max-w-[1020px]' : 'max-w-full px-4');
+
   return (
     <div 
       id="app-container"
-      className="flex h-screen w-screen overflow-hidden transition-colors duration-300 select-none"
+      className="flex h-screen w-full overflow-hidden transition-colors duration-300 select-none relative"
       style={{ 
         backgroundColor: currentTheme.bg, 
         color: currentTheme.text,
@@ -1159,11 +1178,22 @@ export default function App() {
       }}
     >
       
+      {/* Sidebar Mobile Backdrop Overlay */}
+      {isSidebarOpen && (
+        <div 
+          id="sidebar-mobile-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden animate-in fade-in duration-200"
+        />
+      )}
+
       {/* 1. SIDEBAR (Collapsible table of contents, search, import/export) */}
       <div 
         id="app-sidebar"
-        className={`flex-shrink-0 border-r transition-all duration-300 flex flex-col h-full ${
-          isSidebarOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
+        className={`fixed md:sticky top-0 left-0 h-screen flex-shrink-0 border-r transition-all duration-300 flex flex-col overflow-hidden z-40 ${
+          isSidebarOpen 
+            ? 'w-80 opacity-100 translate-x-0 shadow-2xl md:shadow-none' 
+            : 'w-0 opacity-0 pointer-events-none -translate-x-full md:translate-x-0'
         }`}
         style={{ 
           borderColor: currentTheme.border,
@@ -1171,7 +1201,7 @@ export default function App() {
         }}
       >
         {/* Sidebar Header */}
-        <div id="sidebar-header" className="p-4 border-b flex items-center justify-between" style={{ borderColor: currentTheme.border }}>
+        <div id="sidebar-header" className="p-4 border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: currentTheme.border }}>
           <div className="flex items-center gap-2">
             <BookOpen className="w-5 h-5" style={{ color: currentTheme.accent }} />
             <input 
@@ -1194,17 +1224,19 @@ export default function App() {
         </div>
 
         {/* Navigation Tabs */}
-        <div id="sidebar-tabs" className="grid grid-cols-4 border-b text-xs text-center" style={{ borderColor: currentTheme.border }}>
+        <div id="sidebar-tabs" className="grid grid-cols-4 border-b text-xs text-center flex-shrink-0" style={{ borderColor: currentTheme.border }}>
           <button 
             id="tab-reader"
             onClick={() => { setActiveTab('reader'); }}
             className={`py-3 font-medium transition-colors ${activeTab === 'reader' ? 'border-b-2' : ''}`}
             style={{ 
               borderBottomColor: activeTab === 'reader' ? currentTheme.accent : 'transparent',
-              color: activeTab === 'reader' ? currentTheme.text : currentTheme.secondaryText
+              color: activeTab === 'reader' ? currentTheme.text : currentTheme.secondaryText,
+              textAlign: 'center',
+              fontSize: '13px'
             }}
           >
-            ToC
+            Home
           </button>
           <button 
             id="tab-add"
@@ -1242,11 +1274,11 @@ export default function App() {
         </div>
 
         {/* Sidebar Tab Contents */}
-        <div id="sidebar-content" className="flex-1 overflow-y-auto p-4 select-text">
+        <div id="sidebar-content" className="flex-1 flex flex-col overflow-hidden p-4 select-text">
           
           {/* TAB: Table of Contents & Search */}
           {activeTab === 'reader' && (
-            <div id="toc-container" className="flex flex-col h-full space-y-4">
+            <div id="toc-container" className="flex flex-col flex-1 overflow-hidden space-y-4">
               {/* Search Box */}
               <div id="search-box" className="relative flex items-center">
                 <Search className="w-4 h-4 absolute left-3 pointer-events-none" style={{ color: currentTheme.secondaryText }} />
@@ -1270,33 +1302,11 @@ export default function App() {
                 )}
               </div>
 
-              {/* Action Buttons */}
-              <div id="sidebar-actions" className="grid grid-cols-2 gap-2 pb-2 border-b" style={{ borderColor: currentTheme.border }}>
-                <button 
-                  id="btn-export"
-                  onClick={exportLibrary}
-                  className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border transition-all"
-                  style={{ borderColor: currentTheme.border }}
-                  title="Export your personal library to a JSON file"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Export
-                </button>
-                <label 
-                  id="label-import"
-                  className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border cursor-pointer transition-all text-center"
-                  style={{ borderColor: currentTheme.border }}
-                  title="Import a previously saved JSON library"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  Import
-                  <input id="input-import-file" type="file" accept=".json" onChange={importLibrary} className="hidden" />
-                </label>
-              </div>
+
 
               {/* Chapters List */}
-              <div id="chapters-list-wrapper" className="flex-1 space-y-1">
-                <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: currentTheme.secondaryText }}>
+              <div id="chapters-list-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2 flex-shrink-0" style={{ color: currentTheme.secondaryText }}>
                   <span>Chapters ({filteredChapters.length})</span>
                   <div className="flex items-center gap-2">
                     {chapters.length > 0 && (
@@ -1319,10 +1329,10 @@ export default function App() {
                         id="reset-library-btn"
                         onClick={handleResetLibrary}
                         className="text-[10px] hover:underline flex items-center gap-0.5"
-                        title="Reset library to defaults"
+                        title="Clear all chapters in library"
                       >
                         <RotateCcw className="w-2.5 h-2.5" />
-                        Reset
+                        Clear All
                       </button>
                     )}
                   </div>
@@ -1330,7 +1340,7 @@ export default function App() {
 
                 {/* Bulk Controls & Select All Options when in Select Mode */}
                 {isSelectMode && (
-                  <div className="space-y-2 mb-2 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="space-y-2 mb-2 animate-in fade-in slide-in-from-top-1 duration-150 flex-shrink-0">
                     <div className="flex items-center justify-between p-2 rounded-lg bg-black/5 dark:bg-white/5 text-xs">
                       <label className="flex items-center gap-2 cursor-pointer font-medium select-none">
                         <input 
@@ -1358,7 +1368,7 @@ export default function App() {
                     </div>
 
                     {selectedChapterIds.length > 0 && (
-                      <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-lg bg-black/10 dark:bg-white/10 border" style={{ borderColor: currentTheme.border }}>
+                      <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-lg bg-black/10 dark:bg-white/10 border flex-shrink-0" style={{ borderColor: currentTheme.border }}>
                         <button
                           onClick={handleBulkCopy}
                           className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
@@ -1389,11 +1399,11 @@ export default function App() {
                 )}
                 
                 {filteredChapters.length === 0 ? (
-                  <div className="text-center py-8 text-sm" style={{ color: currentTheme.secondaryText }}>
+                  <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
                     {searchQuery ? "No chapters match your search." : "No chapters in your library yet. Add or scrape some!"}
                   </div>
                 ) : (
-                  <div id="chapters-list" className="space-y-1 max-h-[calc(100vh-270px)] overflow-y-auto pr-1">
+                  <div id="chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
                     {filteredChapters.map((chap, index) => {
                       const isSelected = !infiniteScroll && currentChapterIndex === index;
                       const isHighlighted = infiniteScroll && currentChapterIndex === index;
@@ -1746,13 +1756,13 @@ export default function App() {
       </div>
 
       {/* 2. MAIN READING FRAME */}
-      <div id="reader-frame" className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <div id="reader-frame" ref={readerFrameRef} className="flex-1 flex flex-col h-screen overflow-y-auto relative min-w-0">
         
         {/* Floating Controls Overlay (Visible when not distraction free, or on hover/trigger) */}
         {!isDistractionFree && (
           <header 
             id="reader-top-bar"
-            className="p-4 border-b flex items-center justify-between flex-shrink-0 relative z-30 select-none transition-all"
+            className="p-4 border-b flex items-center justify-between flex-shrink-0 sticky top-0 z-30 select-none transition-all"
             style={{ 
               borderColor: currentTheme.border,
               backgroundColor: currentTheme.bg,
@@ -1846,9 +1856,8 @@ export default function App() {
         <div 
           id="reader-canvas"
           ref={readerContainerRef}
-          onScroll={handleScroll}
           onClick={handleCanvasClick}
-          className="flex-1 overflow-y-auto px-4 md:px-8 py-10 select-text outline-none relative"
+          className="flex-1 px-4 md:px-8 py-10 select-text outline-none relative"
           onDoubleClick={() => setIsDistractionFree(!isDistractionFree)}
           title="Double click or tap 3 times to toggle Distraction-Free controls!"
         >
@@ -1881,11 +1890,7 @@ export default function App() {
           ) : (
             <div 
               id="reader-content-width-wrapper"
-              className={`mx-auto transition-all duration-300 ${
-                pageWidth === 'narrow' ? 'max-w-[720px]' : 
-                pageWidth === 'medium' ? 'max-w-[880px]' : 
-                pageWidth === 'wide' ? 'max-w-[1020px]' : 'max-w-full px-4'
-              }`}
+              className={`mx-auto transition-all duration-300 ${currentWidthClass}`}
             >
               {/* INFINITE SCROLL RENDER BLOCK */}
               {infiniteScroll ? (
@@ -1895,9 +1900,10 @@ export default function App() {
                       id={`chap-article-${chap.id}`}
                       key={chap.id}
                       data-chapter-index={idx}
-                      className="chapter-article relative"
+                      className="chapter-article relative transition-all duration-300 mb-12"
+                      aria-hidden={idx < currentChapterIndex ? "true" : undefined}
                       style={{ 
-                        paddingBottom: `${paragraphSpacing}rem`
+                        paddingBottom: `${activeParagraphSpacing}rem`
                       }}
                     >
                       {/* Visual separator between chapters in Infinite Mode */}
@@ -1924,7 +1930,7 @@ export default function App() {
                         <h3 
                           className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
                           style={{ 
-                            fontSize: `${fontSize * 1.15}px`,
+                            fontSize: `${activeFontSize * 1.15}px`,
                             borderColor: currentTheme.border
                           }}
                         >
@@ -1933,16 +1939,22 @@ export default function App() {
                       </div>
 
                       {/* Chapter Content Paragraphs */}
-                      <div className="space-y-0 select-text" style={{ fontFamily: FONT_MAP[fontFamily] }}>
+                      <div 
+                        className="select-text transition-all duration-300 columns-1" 
+                        style={{ 
+                          fontFamily: FONT_MAP[fontFamily],
+                          textAlign: isLandscape ? 'justify' : 'left'
+                        }}
+                      >
                         {chap.content.map((para, pIdx) => (
                           <p 
                             id={`chap-${chap.id}-p-${pIdx}`}
                             key={pIdx} 
                             className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
                             style={{ 
-                              fontSize: `${fontSize}px`, 
-                              lineHeight: lineHeight,
-                              marginBottom: `${paragraphSpacing}rem`
+                              fontSize: `${activeFontSize}px`, 
+                              lineHeight: activeLineHeight,
+                              marginBottom: `${activeParagraphSpacing}rem`
                             }}
                           >
                             {para}
@@ -1957,7 +1969,10 @@ export default function App() {
                 </div>
               ) : (
                 /* SINGLE CHAPTER RENDER BLOCK */
-                <article id="single-chapter-view" className="relative">
+                <article 
+                  id="single-chapter-view" 
+                  className="relative transition-all duration-300"
+                >
                   {/* Title */}
                   <div className="text-center select-none mb-4">
                     <h1 className="font-serif text-3xl md:text-4xl font-bold mb-2">{bookTitle}</h1>
@@ -1968,7 +1983,7 @@ export default function App() {
                     <h2 
                       className="font-serif font-bold tracking-tight border-b pb-2" 
                       style={{ 
-                        fontSize: `${fontSize * 1.2}px`,
+                        fontSize: `${activeFontSize * 1.2}px`,
                         borderColor: currentTheme.border
                       }}
                     >
@@ -1977,16 +1992,22 @@ export default function App() {
                   </div>
 
                   {/* Body paragraphs */}
-                  <div className="select-text mb-16" style={{ fontFamily: FONT_MAP[fontFamily] }}>
+                  <div 
+                    className="select-text mb-16 transition-all duration-300 columns-1" 
+                    style={{ 
+                      fontFamily: FONT_MAP[fontFamily],
+                      textAlign: isLandscape ? 'justify' : 'left'
+                    }}
+                  >
                     {activeChapter.content.map((para, pIdx) => (
                       <p 
                         id={`p-single-${pIdx}`}
                         key={pIdx} 
                         className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
                         style={{ 
-                          fontSize: `${fontSize}px`, 
-                          lineHeight: lineHeight,
-                          marginBottom: `${paragraphSpacing}rem`
+                          fontSize: `${activeFontSize}px`, 
+                          lineHeight: activeLineHeight,
+                          marginBottom: `${activeParagraphSpacing}rem`
                         }}
                       >
                         {para}
@@ -2488,6 +2509,8 @@ export default function App() {
                   />
                 </button>
               </div>
+
+
 
             </div>
           </div>
