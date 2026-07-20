@@ -2163,9 +2163,12 @@ export default function App() {
                       id={`chap-article-${chap.id}`}
                       key={chap.id}
                       data-chapter-index={idx}
-                      className={frameEnabled ? `${frameStyles.cardClass} mb-12` : "chapter-article relative transition-all duration-300 mb-12 select-text"}
+                      className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12` : "chapter-article relative transition-all duration-300 mb-12 select-text"}
                       aria-hidden={idx < currentChapterIndex ? "true" : undefined}
-                      style={frameEnabled ? { ...frameStyles.cardStyle, paddingBottom: `${activeParagraphSpacing}rem` } : { paddingBottom: `${activeParagraphSpacing}rem` }}
+                      style={{
+                        ...(frameEnabled ? frameStyles.cardStyle : {}),
+                        paddingBottom: `${activeParagraphSpacing}rem`
+                      }}
                     >
                       {frameEnabled && frameBorder === 'ornament' && (
                         <div 
