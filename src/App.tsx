@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   BookOpen, 
   Settings, 
@@ -29,7 +29,8 @@ import {
   Book,
   Layers,
   Palette,
-  Headphones
+  Headphones,
+  Infinity
 } from 'lucide-react';
 
 // Define Interface for Chapter
@@ -181,6 +182,29 @@ const cleanGenericChapter = (chap: Chapter): Chapter => {
   };
 };
 
+const ReadAloudIcon = (props: React.SVGProps<SVGSVGElement>) => {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      {/* Capital R with horizontal loop and stem */}
+      <path d="M6 4h5.5a3.5 3.5 0 0 1 0 7H6" />
+      <path d="M6 4v16" />
+      <path d="M6 11h3.5l4.5 9" />
+      {/* Custom sound waves on the upper-right */}
+      <path d="M16 6a3.5 3.5 0 0 1 0 5" />
+      <path d="M19 4a6 6 0 0 1 0 9" />
+    </svg>
+  );
+};
+
 export default function App() {
   // --- LIBRARY STATE ---
   const [chapters, setChapters] = useState<Chapter[]>(() => {
@@ -212,6 +236,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'reader' | 'add' | 'paste' | 'fetch'>('reader');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<'chapters' | 'text'>('chapters');
+  const [highlightedParagraph, setHighlightedParagraph] = useState<{ chapterId: string; paragraphIndex: number } | null>(null);
   const [isDistractionFree, setIsDistractionFree] = useState(false);
   const [isReadingSettingsOpen, setIsReadingSettingsOpen] = useState(false);
 
@@ -426,6 +452,16 @@ export default function App() {
     }, 3000);
   };
 
+  const handleToggleReadingMode = () => {
+    if (listenMode) {
+      setListenMode(false);
+      setInfiniteScroll(true);
+    } else {
+      setListenMode(true);
+      setInfiniteScroll(false);
+    }
+  };
+
   // --- ELEMENT REFS ---
   const readerContainerRef = useRef<HTMLDivElement>(null);
   const readerFrameRef = useRef<HTMLDivElement>(null);
@@ -435,6 +471,116 @@ export default function App() {
   // --- LOCAL STATE / FLAGS ---
   const isScrollingFromObserver = useRef(false);
   const isProgrammaticScrolling = useRef(false);
+
+  // --- SCROLL POSITION PRESERVATION ENGINE ---
+  const withScrollPreservation = (fn: () => void) => {
+    const activeChap = chapters[currentChapterIndex];
+    const activeChapId = activeChap ? activeChap.id : null;
+    let relativeOffset = 0;
+    let targetElement: HTMLElement | null = null;
+    const isWinScroll = infiniteScroll && !listenMode;
+    const originalScrollY = isWinScroll ? window.scrollY : (readerFrameRef.current?.scrollTop || 0);
+
+    if (activeChapId) {
+      const targetId = isWinScroll 
+        ? `chap-article-${activeChapId}` 
+        : `single-chapter-view`;
+      targetElement = document.getElementById(targetId) || document.getElementById(`reader-canvas`);
+      if (targetElement) {
+        relativeOffset = targetElement.getBoundingClientRect().top;
+      }
+    }
+
+    // Set programmatic scroll lock to prevent observer/scroll listeners during reflow
+    isProgrammaticScrolling.current = true;
+
+    // Call state updater
+    fn();
+
+    // Restoration function
+    const restore = () => {
+      if (activeChapId) {
+        const targetId = isWinScroll 
+          ? `chap-article-${activeChapId}` 
+          : `single-chapter-view`;
+        const target = document.getElementById(targetId) || document.getElementById(`reader-canvas`);
+        if (target) {
+          if (isWinScroll) {
+            const currentRectTop = target.getBoundingClientRect().top;
+            const delta = currentRectTop - relativeOffset;
+            window.scrollBy(0, delta);
+          } else {
+            const frameEl = readerFrameRef.current;
+            if (frameEl) {
+              const currentRectTop = target.getBoundingClientRect().top;
+              const delta = currentRectTop - relativeOffset;
+              frameEl.scrollBy(0, delta);
+            }
+          }
+        }
+      } else {
+        if (isWinScroll) {
+          window.scrollTo(0, originalScrollY);
+        } else if (readerFrameRef.current) {
+          readerFrameRef.current.scrollTop = originalScrollY;
+        }
+      }
+    };
+
+    // Restore multiple times during the transition to ensure no visible jump
+    const delays = [0, 50, 100, 150, 200, 250, 300, 350, 400];
+    delays.forEach(delay => {
+      setTimeout(() => {
+        restore();
+        if (delay === 400) {
+          isProgrammaticScrolling.current = false;
+        }
+      }, delay);
+    });
+  };
+
+  const handleSetSidebarOpen = (open: boolean) => {
+    withScrollPreservation(() => {
+      setIsSidebarOpen(open);
+    });
+  };
+
+  const handleSetDistractionFree = (df: boolean) => {
+    withScrollPreservation(() => {
+      setIsDistractionFree(df);
+    });
+  };
+
+  const handleSetReadingSettingsOpen = (open: boolean) => {
+    withScrollPreservation(() => {
+      setIsReadingSettingsOpen(open);
+    });
+  };
+
+  // Keep active chapter index synchronized with the active chapter ID when chapters array changes
+  const activeChapterIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const activeChap = chapters[currentChapterIndex];
+    if (activeChap) {
+      activeChapterIdRef.current = activeChap.id;
+    }
+  }, [currentChapterIndex, chapters]);
+
+  useEffect(() => {
+    if (chapters.length === 0) return;
+    const previousId = activeChapterIdRef.current;
+    if (previousId) {
+      const newIdx = chapters.findIndex(c => c.id === previousId);
+      if (newIdx !== -1 && newIdx !== currentChapterIndex) {
+        // Temporarily disable scroll jump on this adjustment
+        isProgrammaticScrolling.current = true;
+        setCurrentChapterIndex(newIdx);
+        setTimeout(() => {
+          isProgrammaticScrolling.current = false;
+        }, 50);
+      }
+    }
+  }, [chapters]);
 
   // --- LOCAL PERSISTENCE AUTOSAVE ---
   useEffect(() => {
@@ -654,6 +800,7 @@ export default function App() {
   // Handle scroll tracking to auto-save position on appropriate scroll target
   useEffect(() => {
     const handleScroll = () => {
+      if (isProgrammaticScrolling.current) return;
       if (listenMode) return; // Don't track scrolling positions for individual pages in listenMode
       if (isInfiniteScrollingMode) {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -1520,6 +1667,85 @@ export default function App() {
     c.content.some(p => p.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  const textMatches = useMemo(() => {
+    if (!searchQuery.trim() || searchQuery.length < 2) return [];
+    const query = searchQuery.toLowerCase();
+    const results: Array<{
+      chapterId: string;
+      chapterTitle: string;
+      chapterIndex: number;
+      paragraphIndex: number;
+      text: string;
+      previewBefore: string;
+      matchText: string;
+      previewAfter: string;
+    }> = [];
+
+    chapters.forEach((chap, cIdx) => {
+      chap.content.forEach((para, pIdx) => {
+        const lowerPara = para.toLowerCase();
+        let startIdx = 0;
+        while (true) {
+          const matchIdx = lowerPara.indexOf(query, startIdx);
+          if (matchIdx === -1) break;
+
+          const snippetStart = Math.max(0, matchIdx - 40);
+          const snippetEnd = Math.min(para.length, matchIdx + query.length + 50);
+
+          const previewBefore = para.substring(snippetStart, matchIdx);
+          const matchText = para.substring(matchIdx, matchIdx + query.length);
+          const previewAfter = para.substring(matchIdx + query.length, snippetEnd);
+
+          results.push({
+            chapterId: chap.id,
+            chapterTitle: chap.title,
+            chapterIndex: cIdx,
+            paragraphIndex: pIdx,
+            text: para,
+            previewBefore: snippetStart > 0 ? '...' + previewBefore : previewBefore,
+            matchText,
+            previewAfter: snippetEnd < para.length ? previewAfter + '...' : previewAfter
+          });
+
+          if (results.length >= 150) {
+            return;
+          }
+          startIdx = matchIdx + query.length;
+        }
+      });
+    });
+
+    return results;
+  }, [chapters, searchQuery]);
+
+  const handleJumpToParagraph = (chapterId: string, paragraphIndex: number) => {
+    const chapIndex = chapters.findIndex(c => c.id === chapterId);
+    if (chapIndex === -1) return;
+
+    setCurrentChapterIndex(chapIndex);
+    setHighlightedParagraph({ chapterId, paragraphIndex });
+
+    setTimeout(() => {
+      const targetId = infiniteScroll 
+        ? `chap-${chapterId}-p-${paragraphIndex}` 
+        : `p-single-${paragraphIndex}`;
+      
+      const element = document.getElementById(targetId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+
+    setTimeout(() => {
+      setHighlightedParagraph(prev => {
+        if (prev?.chapterId === chapterId && prev?.paragraphIndex === paragraphIndex) {
+          return null;
+        }
+        return prev;
+      });
+    }, 3000);
+  };
+
   const activeChapter = chapters[currentChapterIndex] || null;
 
   // Premium automated adjustments when reading in landscape mode on a tablet/desktop
@@ -1548,7 +1774,7 @@ export default function App() {
       {isSidebarOpen && (
         <div 
           id="sidebar-mobile-backdrop"
-          onClick={() => setIsSidebarOpen(false)}
+          onClick={() => handleSetSidebarOpen(false)}
           className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden animate-in fade-in duration-200"
         />
       )}
@@ -1582,7 +1808,7 @@ export default function App() {
           </div>
           <button 
             id="close-sidebar-btn"
-            onClick={() => setIsSidebarOpen(false)}
+            onClick={() => handleSetSidebarOpen(false)}
             className="p-1.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10"
           >
             <X className="w-4 h-4" />
@@ -1670,186 +1896,306 @@ export default function App() {
 
 
 
-              {/* Chapters List */}
-              <div id="chapters-list-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-1">
-                <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2 flex-shrink-0" style={{ color: currentTheme.secondaryText }}>
-                  <span>Chapters ({filteredChapters.length})</span>
-                  <div className="flex items-center gap-2">
-                    {chapters.length > 0 && (
-                      <button
-                        id="toggle-select-mode-btn"
-                        onClick={() => {
-                          setIsSelectMode(!isSelectMode);
-                          if (isSelectMode) setSelectedChapterIds([]);
-                        }}
-                        className="text-[10px] hover:underline flex items-center gap-0.5"
-                        style={{ color: isSelectMode ? currentTheme.accent : undefined }}
-                        title="Toggle Multi-Select Mode to Delete, Edit or Copy multiple chapters"
-                      >
-                        <CheckSquare className="w-2.5 h-2.5" />
-                        {isSelectMode ? "Cancel Select" : "Select Mode"}
-                      </button>
-                    )}
-                    {chapters.length > 0 && (
-                      <button 
-                        id="reset-library-btn"
-                        onClick={handleResetLibrary}
-                        className="text-[10px] hover:underline flex items-center gap-0.5"
-                        title="Clear all chapters in library"
-                      >
-                        <RotateCcw className="w-2.5 h-2.5" />
-                        Clear All
-                      </button>
-                    )}
+              {searchQuery ? (
+                <div id="search-results-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-3">
+                  {/* Search Segment Tabs */}
+                  <div id="search-segment-tabs" className="flex border-b text-xs font-semibold flex-shrink-0" style={{ borderColor: currentTheme.border }}>
+                    <button
+                      id="search-mode-chapters-btn"
+                      type="button"
+                      onClick={() => setSearchMode('chapters')}
+                      className={`flex-1 py-2 text-center transition-all border-b-2 ${
+                        searchMode === 'chapters' ? 'border-b-2 font-bold' : 'opacity-60'
+                      }`}
+                      style={{
+                        borderBottomColor: searchMode === 'chapters' ? currentTheme.accent : 'transparent',
+                        color: searchMode === 'chapters' ? currentTheme.text : currentTheme.secondaryText,
+                      }}
+                    >
+                      Chapters ({filteredChapters.length})
+                    </button>
+                    <button
+                      id="search-mode-text-btn"
+                      type="button"
+                      onClick={() => setSearchMode('text')}
+                      className={`flex-1 py-2 text-center transition-all border-b-2 ${
+                        searchMode === 'text' ? 'border-b-2 font-bold' : 'opacity-60'
+                      }`}
+                      style={{
+                        borderBottomColor: searchMode === 'text' ? currentTheme.accent : 'transparent',
+                        color: searchMode === 'text' ? currentTheme.text : currentTheme.secondaryText,
+                      }}
+                    >
+                      Text Passages ({textMatches.length})
+                    </button>
                   </div>
-                </div>
 
-                {/* Bulk Controls & Select All Options when in Select Mode */}
-                {isSelectMode && (
-                  <div className="space-y-2 mb-2 animate-in fade-in slide-in-from-top-1 duration-150 flex-shrink-0">
-                    <div className="flex items-center justify-between p-2 rounded-lg bg-black/5 dark:bg-white/5 text-xs">
-                      <label className="flex items-center gap-2 cursor-pointer font-medium select-none">
-                        <input 
-                          type="checkbox"
-                          checked={selectedChapterIds.length === filteredChapters.length && filteredChapters.length > 0}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedChapterIds(filteredChapters.map(c => c.id));
-                            } else {
-                              setSelectedChapterIds([]);
-                            }
+                  {searchMode === 'chapters' ? (
+                    /* Search Mode: Chapters List matching query */
+                    <div id="search-chapters-results" className="flex-1 flex flex-col overflow-hidden">
+                      {filteredChapters.length === 0 ? (
+                        <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
+                          No chapters match your search.
+                        </div>
+                      ) : (
+                        <div id="search-chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
+                          {filteredChapters.map((chap) => {
+                            const isSelected = !isInfiniteScrollingMode && currentChapterIndex === chapters.indexOf(chap);
+                            const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === chapters.indexOf(chap);
+                            return (
+                              <div 
+                                id={`search-chapter-item-${chap.id}`}
+                                key={chap.id}
+                                onClick={() => {
+                                  setCurrentChapterIndex(chapters.indexOf(chap));
+                                }}
+                                className={`group w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between cursor-pointer ${
+                                  isSelected 
+                                    ? 'bg-black/15 dark:bg-white/15 font-semibold border-l-4' 
+                                    : isHighlighted 
+                                      ? 'bg-black/5 dark:bg-white/5 border-l-4 border-dashed'
+                                      : 'hover:bg-black/5 dark:hover:bg-white/5'
+                                }`}
+                                style={{ 
+                                  borderLeftColor: (isSelected || isHighlighted) ? currentTheme.accent : 'transparent'
+                                }}
+                              >
+                                <div className="flex-1 min-w-0 pr-2">
+                                  <div className="truncate font-medium">{chap.title}</div>
+                                  <div className="text-xs truncate" style={{ color: currentTheme.secondaryText }}>
+                                    {chap.content.length} paragraphs • #{chap.number}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Search Mode: Text Matches matching query */
+                    <div id="search-text-results" className="flex-1 flex flex-col overflow-hidden">
+                      {textMatches.length === 0 ? (
+                        <div className="text-center py-8 text-sm flex-1 space-y-2" style={{ color: currentTheme.secondaryText }}>
+                          <p>No matching text passages found.</p>
+                          <p className="text-xs opacity-75">Try typing a more specific phrase.</p>
+                        </div>
+                      ) : (
+                        <div id="text-matches-list" className="space-y-2 flex-1 overflow-y-auto pr-1">
+                          {textMatches.map((match, mIdx) => {
+                            const isActiveChapter = currentChapterIndex === match.chapterIndex;
+                            const isMatchHighlighted = highlightedParagraph?.chapterId === match.chapterId && highlightedParagraph?.paragraphIndex === match.paragraphIndex;
+                            return (
+                              <button
+                                key={mIdx}
+                                type="button"
+                                onClick={() => handleJumpToParagraph(match.chapterId, match.paragraphIndex)}
+                                className={`w-full text-left p-2.5 rounded-lg text-xs border transition-all flex flex-col text-ellipsis overflow-hidden ${
+                                  isMatchHighlighted 
+                                    ? 'bg-[#FF79B0]/20 border-[#FF79B0] ring-1 ring-[#FF79B0]/30 shadow-sm'
+                                    : isActiveChapter
+                                      ? 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border-current/10'
+                                      : 'hover:bg-black/5 dark:hover:bg-white/5 border-transparent'
+                                }`}
+                                style={{ borderColor: isMatchHighlighted ? undefined : currentTheme.border }}
+                              >
+                                <div className="flex items-center justify-between font-semibold mb-1 w-full" style={{ color: currentTheme.accent }}>
+                                  <span className="truncate max-w-[170px]">{match.chapterTitle}</span>
+                                  <span className="text-[10px] opacity-75 whitespace-nowrap">Para {match.paragraphIndex + 1}</span>
+                                </div>
+                                <div className="leading-relaxed opacity-85 break-words select-none text-left" style={{ color: currentTheme.text }}>
+                                  <span>{match.previewBefore}</span>
+                                  <mark className="bg-[#FF79B0]/35 text-inherit font-bold px-0.5 rounded">{match.matchText}</mark>
+                                  <span>{match.previewAfter}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Chapters List (Normal T.O.C. when no Search Query) */
+                <div id="chapters-list-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-1">
+                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2 flex-shrink-0" style={{ color: currentTheme.secondaryText }}>
+                    <span>Chapters ({filteredChapters.length})</span>
+                    <div className="flex items-center gap-2">
+                      {chapters.length > 0 && (
+                        <button
+                          id="toggle-select-mode-btn"
+                          onClick={() => {
+                            setIsSelectMode(!isSelectMode);
+                            if (isSelectMode) setSelectedChapterIds([]);
                           }}
-                          className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500"
-                        />
-                        <span>Select All ({selectedChapterIds.length} of {filteredChapters.length})</span>
-                      </label>
-                      {selectedChapterIds.length > 0 && (
-                        <button 
-                          onClick={() => setSelectedChapterIds([])}
-                          className="text-[10px] hover:underline opacity-80"
+                          className="text-[10px] hover:underline flex items-center gap-0.5"
+                          style={{ color: isSelectMode ? currentTheme.accent : undefined }}
+                          title="Toggle Multi-Select Mode to Delete, Edit or Copy multiple chapters"
                         >
-                          Deselect All
+                          <CheckSquare className="w-2.5 h-2.5" />
+                          {isSelectMode ? "Cancel Select" : "Select Mode"}
+                        </button>
+                      )}
+                      {chapters.length > 0 && (
+                        <button 
+                          id="reset-library-btn"
+                          onClick={handleResetLibrary}
+                          className="text-[10px] hover:underline flex items-center gap-0.5"
+                          title="Clear all chapters in library"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          Clear All
                         </button>
                       )}
                     </div>
+                  </div>
 
-                    {selectedChapterIds.length > 0 && (
-                      <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-lg bg-black/10 dark:bg-white/10 border flex-shrink-0" style={{ borderColor: currentTheme.border }}>
-                        <button
-                          onClick={handleBulkCopy}
-                          className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
-                          title="Copy content of selected chapters to clipboard"
-                        >
-                          <Copy className="w-3 h-3" style={{ color: currentTheme.accent }} />
-                          Copy
-                        </button>
-                        <button
-                          onClick={handleBulkEdit}
-                          className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
-                          title="Edit prefix, title additions, offsets or content replacements in selected chapters"
-                        >
-                          <Edit3 className="w-3 h-3" style={{ color: currentTheme.accent }} />
-                          Edit
-                        </button>
-                        <button
-                          onClick={handleBulkDelete}
-                          className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-rose-500/10 hover:bg-rose-500/25 text-rose-500 text-[11px] font-semibold transition-colors animate-pulse"
-                          title="Delete selected chapters"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          Delete
-                        </button>
+                  {/* Bulk Controls & Select All Options when in Select Mode */}
+                  {isSelectMode && (
+                    <div className="space-y-2 mb-2 animate-in fade-in slide-in-from-top-1 duration-150 flex-shrink-0">
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-black/5 dark:bg-white/5 text-xs">
+                        <label className="flex items-center gap-2 cursor-pointer font-medium select-none">
+                          <input 
+                            type="checkbox"
+                            checked={selectedChapterIds.length === filteredChapters.length && filteredChapters.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedChapterIds(filteredChapters.map(c => c.id));
+                              } else {
+                                setSelectedChapterIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500"
+                          />
+                          <span>Select All ({selectedChapterIds.length} of {filteredChapters.length})</span>
+                        </label>
+                        {selectedChapterIds.length > 0 && (
+                          <button 
+                            onClick={() => setSelectedChapterIds([])}
+                            className="text-[10px] hover:underline opacity-80"
+                          >
+                            Deselect All
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
-                
-                {filteredChapters.length === 0 ? (
-                  <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
-                    {searchQuery ? "No chapters match your search." : "No chapters in your library yet. Add or scrape some!"}
-                  </div>
-                ) : (
-                  <div id="chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
-                    {filteredChapters.map((chap, index) => {
-                      const isSelected = !isInfiniteScrollingMode && currentChapterIndex === index;
-                      const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === index;
-                      const isChecked = selectedChapterIds.includes(chap.id);
-                      return (
-                        <div 
-                          id={`chapter-item-${chap.id}`}
-                          key={chap.id}
-                          onClick={(e) => {
-                            if (isSelectMode) {
-                              e.stopPropagation();
-                              setSelectedChapterIds(prev => {
-                                if (prev.includes(chap.id)) {
-                                  return prev.filter(id => id !== chap.id);
-                                } else {
-                                  return [...prev, chap.id];
-                                }
-                              });
-                            } else {
-                              // Do not disable infinite scroll so they can jump to any chapter within infinity flow
-                              setCurrentChapterIndex(chapters.indexOf(chap));
-                            }
-                          }}
-                          className={`group w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between cursor-pointer ${
-                            isSelectMode && isChecked
-                              ? 'bg-black/10 dark:bg-white/10 ring-1 ring-current/25 font-semibold'
-                              : isSelected 
-                                ? 'bg-black/15 dark:bg-white/15 font-semibold border-l-4' 
-                                : isHighlighted 
-                                  ? 'bg-black/5 dark:bg-white/5 border-l-4 border-dashed'
-                                  : 'hover:bg-black/5 dark:hover:bg-white/5'
-                          }`}
-                          style={{ 
-                            borderLeftColor: (!isSelectMode && (isSelected || isHighlighted)) ? currentTheme.accent : 'transparent'
-                          }}
-                        >
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            {isSelectMode && (
-                              <input 
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => {}} // parent onClick handles toggle
-                                className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500 mr-1 flex-shrink-0"
-                              />
-                            )}
-                            <div className="flex-1 min-w-0 pr-2">
-                              <div className="truncate font-medium">{chap.title}</div>
-                              <div className="text-xs truncate" style={{ color: currentTheme.secondaryText }}>
-                                {chap.content.length} paragraphs • #{chap.number}
+
+                      {selectedChapterIds.length > 0 && (
+                        <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-lg bg-black/10 dark:bg-white/10 border flex-shrink-0" style={{ borderColor: currentTheme.border }}>
+                          <button
+                            onClick={handleBulkCopy}
+                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
+                            title="Copy content of selected chapters to clipboard"
+                          >
+                            <Copy className="w-3 h-3" style={{ color: currentTheme.accent }} />
+                            Copy
+                          </button>
+                          <button
+                            onClick={handleBulkEdit}
+                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
+                            title="Edit prefix, title additions, offsets or content replacements in selected chapters"
+                          >
+                            <Edit3 className="w-3 h-3" style={{ color: currentTheme.accent }} />
+                            Edit
+                          </button>
+                          <button
+                            onClick={handleBulkDelete}
+                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-rose-500/10 hover:bg-rose-500/25 text-rose-500 text-[11px] font-semibold transition-colors animate-pulse"
+                            title="Delete selected chapters"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {filteredChapters.length === 0 ? (
+                    <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
+                      No chapters in your library yet. Add or scrape some!
+                    </div>
+                  ) : (
+                    <div id="chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
+                      {filteredChapters.map((chap, index) => {
+                        const isSelected = !isInfiniteScrollingMode && currentChapterIndex === index;
+                        const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === index;
+                        const isChecked = selectedChapterIds.includes(chap.id);
+                        return (
+                          <div 
+                            id={`chapter-item-${chap.id}`}
+                            key={chap.id}
+                            onClick={(e) => {
+                              if (isSelectMode) {
+                                e.stopPropagation();
+                                setSelectedChapterIds(prev => {
+                                  if (prev.includes(chap.id)) {
+                                    return prev.filter(id => id !== chap.id);
+                                  } else {
+                                    return [...prev, chap.id];
+                                  }
+                                });
+                              } else {
+                                setCurrentChapterIndex(chapters.indexOf(chap));
+                              }
+                            }}
+                            className={`group w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between cursor-pointer ${
+                              isSelectMode && isChecked
+                                ? 'bg-black/10 dark:bg-white/10 ring-1 ring-current/25 font-semibold'
+                                : isSelected 
+                                  ? 'bg-black/15 dark:bg-white/15 font-semibold border-l-4' 
+                                  : isHighlighted 
+                                    ? 'bg-black/5 dark:bg-white/5 border-l-4 border-dashed'
+                                    : 'hover:bg-black/5 dark:hover:bg-white/5'
+                            }`}
+                            style={{ 
+                              borderLeftColor: (!isSelectMode && (isSelected || isHighlighted)) ? currentTheme.accent : 'transparent'
+                            }}
+                          >
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              {isSelectMode && (
+                                <input 
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {}} 
+                                  className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500 mr-1 flex-shrink-0"
+                                />
+                              )}
+                              <div className="flex-1 min-w-0 pr-2">
+                                <div className="truncate font-medium">{chap.title}</div>
+                                <div className="text-xs truncate" style={{ color: currentTheme.secondaryText }}>
+                                  {chap.content.length} paragraphs • #{chap.number}
+                                </div>
                               </div>
                             </div>
+                            
+                            {!isSelectMode && (
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  id={`edit-chapter-${chap.id}`}
+                                  onClick={(e) => handleEditChapter(chap, e)}
+                                  className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-xs"
+                                  title="Edit Chapter"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button 
+                                  id={`delete-chapter-${chap.id}`}
+                                  onClick={(e) => handleDeleteChapter(chap.id, e)}
+                                  className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-rose-500 text-xs"
+                                  title="Delete Chapter"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          
-                          {/* Hover Actions (Edit/Delete) - Only show when NOT in Select Mode */}
-                          {!isSelectMode && (
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                id={`edit-chapter-${chap.id}`}
-                                onClick={(e) => handleEditChapter(chap, e)}
-                                className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-xs"
-                                title="Edit Chapter"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <button 
-                                id={`delete-chapter-${chap.id}`}
-                                onClick={(e) => handleDeleteChapter(chap.id, e)}
-                                className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-rose-500 text-xs"
-                                title="Delete Chapter"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2146,7 +2492,7 @@ export default function App() {
             <div className="flex items-center gap-3 min-w-0">
               <button 
                 id="toggle-sidebar-btn-header"
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                onClick={() => handleSetSidebarOpen(!isSidebarOpen)}
                 className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex-shrink-0"
                 title="Toggle Table of Contents Sidebar"
               >
@@ -2167,11 +2513,25 @@ export default function App() {
 
             {/* Right side: Search and Aa / Settings */}
             <div className="flex items-center gap-1.5 flex-shrink-0">
+              {/* Reading Mode Toggle Button */}
+              <button 
+                id="reading-mode-toggle-btn"
+                onClick={handleToggleReadingMode}
+                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center justify-center"
+                title={listenMode ? "Switch to Infinite Scroll Mode" : "Switch to Read Aloud / Listen Mode"}
+              >
+                {listenMode ? (
+                  <ReadAloudIcon className="w-4.5 h-4.5" />
+                ) : (
+                  <Infinity className="w-4.5 h-4.5" />
+                )}
+              </button>
+
               {/* Search Toggle */}
               <button 
                 id="search-header-btn"
                 onClick={() => {
-                  setIsSidebarOpen(true);
+                  handleSetSidebarOpen(true);
                   setActiveTab('reader');
                   // focus the search input after a microtask
                   setTimeout(() => {
@@ -2187,7 +2547,7 @@ export default function App() {
               {/* Reading Settings Page Settings "Aa" button */}
               <button 
                 id="reading-settings-btn"
-                onClick={() => setIsReadingSettingsOpen(true)}
+                onClick={() => handleSetReadingSettingsOpen(true)}
                 className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center gap-1.5 text-sm font-semibold border border-transparent hover:border-current/10"
                 style={{ color: currentTheme.accent }}
                 title="Adjust Text, Theme, and Layout Settings"
@@ -2203,7 +2563,7 @@ export default function App() {
           <div className="absolute top-4 left-4 z-50 flex gap-2 animate-in fade-in zoom-in-95 duration-200">
             <button 
               id="exit-distraction-free-btn"
-              onClick={() => setIsDistractionFree(false)}
+              onClick={() => handleSetDistractionFree(false)}
               className="px-3 py-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs backdrop-blur border border-white/10 flex items-center gap-1 shadow-lg transition-all"
               title="Show Controls"
             >
@@ -2220,7 +2580,7 @@ export default function App() {
           onClick={handleCanvasClick}
           className="flex-1 px-4 md:px-8 py-10 select-text outline-none relative transition-colors duration-300"
           style={frameEnabled ? frameStyles.outerStyle : {}}
-          onDoubleClick={() => setIsDistractionFree(!isDistractionFree)}
+          onDoubleClick={() => handleSetDistractionFree(!isDistractionFree)}
           title="Double click or tap 3 times to toggle Distraction-Free controls!"
         >
           {chapters.length === 0 ? (
@@ -2233,7 +2593,7 @@ export default function App() {
               <div className="flex gap-3">
                 <button 
                   id="empty-add-btn"
-                  onClick={() => { setIsSidebarOpen(true); setActiveTab('add'); }}
+                  onClick={() => { handleSetSidebarOpen(true); setActiveTab('add'); }}
                   className="px-4 py-2 rounded-lg font-bold text-white text-sm hover:brightness-110"
                   style={{ backgroundColor: currentTheme.accent }}
                 >
@@ -2241,7 +2601,7 @@ export default function App() {
                 </button>
                 <button 
                   id="empty-scrape-btn"
-                  onClick={() => { setIsSidebarOpen(true); setActiveTab('fetch'); }}
+                  onClick={() => { handleSetSidebarOpen(true); setActiveTab('fetch'); }}
                   className="px-4 py-2 rounded-lg font-bold text-sm border hover:bg-black/5 dark:hover:bg-white/5"
                   style={{ borderColor: currentTheme.border }}
                 >
@@ -2326,20 +2686,27 @@ export default function App() {
                             textAlign: isLandscape ? 'justify' : 'left'
                           }}
                         >
-                          {chap.content.map((para, pIdx) => (
-                            <p 
-                              id={`chap-${chap.id}-p-${pIdx}`}
-                              key={pIdx} 
-                              className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
-                              style={{ 
-                                fontSize: `${activeFontSize}px`, 
-                                lineHeight: activeLineHeight,
-                                marginBottom: `${activeParagraphSpacing}rem`
-                              }}
-                            >
-                              {para}
-                            </p>
-                          ))}
+                          {chap.content.map((para, pIdx) => {
+                            const isHighlighted = highlightedParagraph?.chapterId === chap.id && highlightedParagraph?.paragraphIndex === pIdx;
+                            return (
+                              <p 
+                                id={`chap-${chap.id}-p-${pIdx}`}
+                                key={pIdx} 
+                                className={`leading-relaxed rounded px-2 py-1 transition-all duration-1000 ${
+                                  isHighlighted 
+                                    ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
+                                    : 'hover:bg-black/5 dark:hover:bg-white/5'
+                                }`}
+                                style={{ 
+                                  fontSize: `${activeFontSize}px`, 
+                                  lineHeight: activeLineHeight,
+                                  marginBottom: `${activeParagraphSpacing}rem`
+                                }}
+                              >
+                                {para}
+                              </p>
+                            );
+                          })}
                         </div>
                       </article>
                     );
@@ -2388,20 +2755,27 @@ export default function App() {
                       textAlign: isLandscape ? 'justify' : 'left'
                     }}
                   >
-                    {activeChapter.content.map((para, pIdx) => (
-                      <p 
-                        id={`p-single-${pIdx}`}
-                        key={pIdx} 
-                        className="leading-relaxed hover:bg-black/5 dark:hover:bg-white/5 rounded px-1 transition-all"
-                        style={{ 
-                          fontSize: `${activeFontSize}px`, 
-                          lineHeight: activeLineHeight,
-                          marginBottom: `${activeParagraphSpacing}rem`
-                        }}
-                      >
-                        {para}
-                      </p>
-                    ))}
+                    {activeChapter.content.map((para, pIdx) => {
+                      const isHighlighted = highlightedParagraph?.chapterId === activeChapter.id && highlightedParagraph?.paragraphIndex === pIdx;
+                      return (
+                        <p 
+                          id={`p-single-${pIdx}`}
+                          key={pIdx} 
+                          className={`leading-relaxed rounded px-2 py-1 transition-all duration-1000 ${
+                            isHighlighted 
+                              ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
+                              : 'hover:bg-black/5 dark:hover:bg-white/5'
+                          }`}
+                          style={{ 
+                            fontSize: `${activeFontSize}px`, 
+                            lineHeight: activeLineHeight,
+                            marginBottom: `${activeParagraphSpacing}rem`
+                          }}
+                        >
+                          {para}
+                        </p>
+                      );
+                    })}
                   </div>
 
                   {/* Single Chapter Navigation Actions */}
@@ -2671,7 +3045,7 @@ export default function App() {
       {isReadingSettingsOpen && (
         <div 
           id="reading-settings-overlay" 
-          onClick={() => setIsReadingSettingsOpen(false)}
+          onClick={() => handleSetReadingSettingsOpen(false)}
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
         >
           <div 
@@ -2689,7 +3063,7 @@ export default function App() {
               <h3 className="text-base font-bold tracking-tight">Reading Settings</h3>
               <button 
                 id="close-reading-settings-btn"
-                onClick={() => setIsReadingSettingsOpen(false)}
+                onClick={() => handleSetReadingSettingsOpen(false)}
                 className="p-1 rounded-full hover:bg-white/10 transition-colors"
               >
                 <X className="w-5 h-5 text-white/80" />
@@ -2935,7 +3309,7 @@ export default function App() {
                 <button
                   id="settings-distraction-free-btn"
                   type="button"
-                  onClick={() => setIsDistractionFree(!isDistractionFree)}
+                  onClick={() => handleSetDistractionFree(!isDistractionFree)}
                   className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
                   style={{ 
                     backgroundColor: isDistractionFree ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
