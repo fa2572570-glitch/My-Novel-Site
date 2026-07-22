@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   BookOpen, 
   Settings, 
@@ -30,7 +30,8 @@ import {
   Layers,
   Palette,
   Headphones,
-  Infinity
+  Infinity,
+  Sliders
 } from 'lucide-react';
 
 // Define Interface for Chapter
@@ -218,18 +219,71 @@ export default function App() {
   });
 
   const [currentChapterIndex, setCurrentChapterIndex] = useState(() => {
+    // 1. Synchronously load saved chapters to map the ?chapter parameter or saved position to an array index
+    let loadedChapters: Chapter[] = [];
+    try {
+      const savedChaps = localStorage.getItem('novel_chapters');
+      if (savedChaps) {
+        const raw = JSON.parse(savedChaps);
+        if (Array.isArray(raw)) {
+          loadedChapters = raw.map(cleanGenericChapter);
+        }
+      }
+    } catch (e) {
+      console.error("Error loading chapters on init:", e);
+    }
+
+    if (loadedChapters.length === 0) {
+      loadedChapters = DEFAULT_CHAPTERS.map(cleanGenericChapter);
+    }
+
+    // 2. Try loading from URL parameter
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const urlChap = params.get('chapter');
       if (urlChap) {
-        const parsed = parseInt(urlChap, 10);
-        if (!isNaN(parsed) && parsed > 0) {
-          return parsed - 1;
+        // Match by real chapter number first
+        const parsedNum = parseInt(urlChap, 10);
+        if (!isNaN(parsedNum)) {
+          const idx = loadedChapters.findIndex(c => c.number === parsedNum);
+          if (idx !== -1) return idx;
+        }
+        // Match by chapter ID
+        const idxById = loadedChapters.findIndex(c => c.id === urlChap);
+        if (idxById !== -1) return idxById;
+
+        // Legacy/fallback: index-based
+        if (!isNaN(parsedNum) && parsedNum > 0 && parsedNum <= loadedChapters.length) {
+          return parsedNum - 1;
         }
       }
     }
-    const saved = localStorage.getItem('novel_current_index');
-    return saved ? parseInt(saved, 10) : 0;
+
+    // 3. Try loading from saved active chapter ID or chapter number
+    const savedChapId = localStorage.getItem('novel_current_chapter_id');
+    if (savedChapId && loadedChapters.length > 0) {
+      const idx = loadedChapters.findIndex(c => c.id === savedChapId);
+      if (idx !== -1) return idx;
+    }
+    const savedChapNum = localStorage.getItem('novel_current_chapter_number');
+    if (savedChapNum && loadedChapters.length > 0) {
+      const parsedNum = parseInt(savedChapNum, 10);
+      if (!isNaN(parsedNum)) {
+        const idx = loadedChapters.findIndex(c => c.number === parsedNum);
+        if (idx !== -1) return idx;
+      }
+    }
+
+    // Backwards compatibility fallback to saved index
+    const savedIdx = localStorage.getItem('novel_current_index');
+    if (savedIdx) {
+      const parsed = parseInt(savedIdx, 10);
+      if (!isNaN(parsed) && parsed >= 0 && parsed < loadedChapters.length) {
+        return parsed;
+      }
+    }
+
+    return 0;
   });
 
   // --- UI LAYOUT STATE ---
@@ -566,13 +620,13 @@ export default function App() {
     }
   }, [currentChapterIndex, chapters]);
 
+  // Adjust current chapter index if chapter list shifts or modifies
   useEffect(() => {
     if (chapters.length === 0) return;
     const previousId = activeChapterIdRef.current;
     if (previousId) {
       const newIdx = chapters.findIndex(c => c.id === previousId);
       if (newIdx !== -1 && newIdx !== currentChapterIndex) {
-        // Temporarily disable scroll jump on this adjustment
         isProgrammaticScrolling.current = true;
         setCurrentChapterIndex(newIdx);
         setTimeout(() => {
@@ -593,7 +647,12 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('novel_current_index', currentChapterIndex.toString());
-  }, [currentChapterIndex]);
+    const activeChap = chapters[currentChapterIndex];
+    if (activeChap) {
+      localStorage.setItem('novel_current_chapter_id', activeChap.id);
+      localStorage.setItem('novel_current_chapter_number', activeChap.number.toString());
+    }
+  }, [currentChapterIndex, chapters]);
 
   useEffect(() => {
     localStorage.setItem('novel_theme', theme);
@@ -732,16 +791,132 @@ export default function App() {
       document.head.appendChild(canonicalLink);
     }
     const currentUrl = new URL(window.location.href);
-    currentUrl.searchParams.set('chapter', (currentChapterIndex + 1).toString());
+    const chapIdentifier = (activeChap.number !== undefined && activeChap.number !== null) 
+      ? activeChap.number.toString() 
+      : activeChap.id;
+    currentUrl.searchParams.set('chapter', chapIdentifier);
     canonicalLink.setAttribute('href', currentUrl.toString());
 
     // 3. Update browser history state to reflect the current active chapter
     window.history.replaceState(
-      { chapterIndex: currentChapterIndex },
+      { 
+        chapterIndex: currentChapterIndex,
+        chapterId: activeChap.id,
+        chapterNumber: activeChap.number,
+        chapterIdentifier: chapIdentifier
+      },
       pageTitle,
-      `?chapter=${currentChapterIndex + 1}`
+      `?chapter=${chapIdentifier}`
     );
   }, [currentChapterIndex, chapters, bookTitle]);
+
+  // Listen for browser popstate (Back/Forward history navigation)
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (chapters.length === 0) return;
+
+      // 1. Check history state object
+      if (event.state) {
+        if (event.state.chapterNumber !== undefined && event.state.chapterNumber !== null) {
+          const idx = chapters.findIndex(c => c.number === event.state.chapterNumber);
+          if (idx !== -1) {
+            setCurrentChapterIndex(idx);
+            return;
+          }
+        }
+        if (event.state.chapterId) {
+          const idx = chapters.findIndex(c => c.id === event.state.chapterId);
+          if (idx !== -1) {
+            setCurrentChapterIndex(idx);
+            return;
+          }
+        }
+      }
+
+      // 2. Check URL search parameters
+      const params = new URLSearchParams(window.location.search);
+      const urlChap = params.get('chapter');
+      if (urlChap) {
+        const parsedNum = parseInt(urlChap, 10);
+        if (!isNaN(parsedNum)) {
+          const idx = chapters.findIndex(c => c.number === parsedNum);
+          if (idx !== -1) {
+            setCurrentChapterIndex(idx);
+            return;
+          }
+        }
+        const idxById = chapters.findIndex(c => c.id === urlChap);
+        if (idxById !== -1) {
+          setCurrentChapterIndex(idxById);
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [chapters]);
+
+  // Track currentChapterIndex in ref to avoid stale closures
+  const currentChapterIndexRef = useRef(currentChapterIndex);
+  useEffect(() => {
+    currentChapterIndexRef.current = currentChapterIndex;
+  }, [currentChapterIndex]);
+
+  // Determine which chapter is currently visible in the viewport and update active index
+  const updateActiveChapterFromViewport = useCallback(() => {
+    if (!isInfiniteScrollingMode || chapters.length === 0) return;
+    if (isProgrammaticScrolling.current) return;
+
+    const articles = document.querySelectorAll('.chapter-article');
+    if (articles.length === 0) return;
+
+    const viewportHeight = window.innerHeight;
+    // Focal line for active reading: 150px below top of viewport (accounting for header ~60px)
+    const focalY = Math.min(180, Math.max(100, viewportHeight * 0.25));
+
+    let bestIndex = -1;
+    let maxVisibleHeight = -1;
+    let closestDistance = Infinity;
+
+    articles.forEach((art) => {
+      const indexAttr = art.getAttribute('data-chapter-index');
+      if (indexAttr === null) return;
+      const index = parseInt(indexAttr, 10);
+      if (isNaN(index)) return;
+
+      const rect = art.getBoundingClientRect();
+
+      // Priority 1: Chapter spans across the focal line
+      if (rect.top <= focalY && rect.bottom > focalY) {
+        bestIndex = index;
+        return;
+      }
+
+      // Priority 2: Maximum visible height inside viewport
+      const visibleTop = Math.max(0, rect.top);
+      const visibleBottom = Math.min(viewportHeight, rect.bottom);
+      const visibleHeight = visibleBottom - visibleTop;
+
+      if (visibleHeight > maxVisibleHeight && visibleHeight > 0) {
+        maxVisibleHeight = visibleHeight;
+        bestIndex = index;
+      } else if (maxVisibleHeight <= 0) {
+        const distance = Math.abs(rect.top - focalY);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          bestIndex = index;
+        }
+      }
+    });
+
+    if (bestIndex !== -1 && bestIndex !== currentChapterIndexRef.current) {
+      isScrollingFromObserver.current = true;
+      setCurrentChapterIndex(bestIndex);
+    }
+  }, [isInfiniteScrollingMode, chapters]);
 
   // Load last scroll position or scroll to top on chapter change
   useEffect(() => {
@@ -755,7 +930,7 @@ export default function App() {
 
     if (infiniteScroll) {
       if (isScrollingFromObserver.current) {
-        // Change was triggered by natural scrolling intersection observer - do NOT scroll/jump
+        // Change was triggered by natural scrolling - do NOT scroll/jump
         isScrollingFromObserver.current = false;
         return;
       }
@@ -764,22 +939,24 @@ export default function App() {
       if (targetElement) {
         isProgrammaticScrolling.current = true;
         targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
-        // Release programmatic scrolling lock once DOM has settled
         setTimeout(() => {
           isProgrammaticScrolling.current = false;
-        }, 500);
+          updateActiveChapterFromViewport();
+        }, 150);
       }
       return;
     }
 
     // Single chapter mode: standard scroll restore or scroll to top inside readerFrameRef
-    const savedScrollY = localStorage.getItem(`scroll_pos_${currentChapterIndex}`);
+    const activeChap = chapters[currentChapterIndex];
+    const scrollKey = activeChap ? `scroll_pos_${activeChap.id}` : `scroll_pos_idx_${currentChapterIndex}`;
+    const savedScrollY = localStorage.getItem(scrollKey) || (activeChap ? localStorage.getItem(`scroll_pos_${currentChapterIndex}`) : null);
     if (savedScrollY && readerFrameRef.current) {
       readerFrameRef.current.scrollTo(0, parseInt(savedScrollY, 10));
     } else if (readerFrameRef.current) {
       readerFrameRef.current.scrollTo(0, 0);
     }
-  }, [currentChapterIndex, infiniteScroll, listenMode]);
+  }, [currentChapterIndex, infiniteScroll, listenMode, updateActiveChapterFromViewport]);
 
   // Restore saved overall infinite scroll position on mount
   useEffect(() => {
@@ -791,29 +968,37 @@ export default function App() {
           window.scrollTo(0, parseInt(savedInfiniteScroll, 10));
           setTimeout(() => {
             isProgrammaticScrolling.current = false;
+            updateActiveChapterFromViewport();
           }, 500);
         }, 100);
       }
     }
-  }, []);
+  }, [isInfiniteScrollingMode, updateActiveChapterFromViewport]);
 
-  // Handle scroll tracking to auto-save position on appropriate scroll target
+  // Handle scroll tracking to auto-save position and update active chapter on scroll
   useEffect(() => {
     const handleScroll = () => {
-      if (isProgrammaticScrolling.current) return;
-      if (listenMode) return; // Don't track scrolling positions for individual pages in listenMode
+      if (listenMode) return;
       if (isInfiniteScrollingMode) {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
         localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
+        if (!isProgrammaticScrolling.current) {
+          updateActiveChapterFromViewport();
+        }
       } else {
         if (!readerFrameRef.current) return;
         const scrollTop = readerFrameRef.current.scrollTop;
+        const chapId = activeChapterIdRef.current;
+        if (chapId) {
+          localStorage.setItem(`scroll_pos_${chapId}`, scrollTop.toString());
+        }
         localStorage.setItem(`scroll_pos_${currentChapterIndexRef.current}`, scrollTop.toString());
       }
     };
 
     if (useWindowScrolling) {
       window.addEventListener('scroll', handleScroll, { passive: true });
+      window.addEventListener('resize', handleScroll, { passive: true });
     } else {
       const frameEl = readerFrameRef.current;
       if (frameEl) {
@@ -823,19 +1008,14 @@ export default function App() {
 
     return () => {
       window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
       if (readerFrameRef.current) {
         readerFrameRef.current.removeEventListener('scroll', handleScroll);
       }
     };
-  }, [useWindowScrolling, isInfiniteScrollingMode, listenMode]);
+  }, [useWindowScrolling, isInfiniteScrollingMode, listenMode, updateActiveChapterFromViewport]);
 
-  // Track currentChapterIndex in ref to avoid recreating IntersectionObserver on every change (prevents flickering)
-  const currentChapterIndexRef = useRef(currentChapterIndex);
-  useEffect(() => {
-    currentChapterIndexRef.current = currentChapterIndex;
-  }, [currentChapterIndex]);
-
-  // Setup IntersectionObserver for Infinite Scroll
+  // Setup IntersectionObserver as additional helper for Infinite Scroll
   useEffect(() => {
     if (!useWindowScrolling || chapters.length === 0) return;
 
@@ -843,28 +1023,15 @@ export default function App() {
       infiniteObserverRef.current.disconnect();
     }
 
-    infiniteObserverRef.current = new IntersectionObserver((entries) => {
-      if (isProgrammaticScrolling.current) {
-        return; // Ignore intersection transitions during programmatic jumps
+    infiniteObserverRef.current = new IntersectionObserver(() => {
+      if (!isProgrammaticScrolling.current) {
+        updateActiveChapterFromViewport();
       }
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const indexAttr = entry.target.getAttribute('data-chapter-index');
-          if (indexAttr !== null) {
-            const index = parseInt(indexAttr, 10);
-            if (!isNaN(index) && index !== currentChapterIndexRef.current) {
-              isScrollingFromObserver.current = true;
-              setCurrentChapterIndex(index);
-            }
-          }
-        }
-      });
     }, {
-      root: null, // Use our browser viewport for full-page window scrolling in Infinity Mode
-      rootMargin: '-15% 0px -45% 0px' // Trigger active index change when chapter is centered in viewport, robust for landscape
+      root: null,
+      rootMargin: '-10% 0px -40% 0px'
     });
 
-    // Observe all chapter articles
     const articles = document.querySelectorAll('.chapter-article');
     articles.forEach(art => {
       infiniteObserverRef.current?.observe(art);
@@ -873,7 +1040,17 @@ export default function App() {
     return () => {
       infiniteObserverRef.current?.disconnect();
     };
-  }, [useWindowScrolling, chapters]); // Omitted currentChapterIndex dependency to stop re-registration loops/flicker
+  }, [useWindowScrolling, chapters, updateActiveChapterFromViewport]);
+
+  // Sync active chapter on chapter list load/updates in Infinity Mode
+  useEffect(() => {
+    if (isInfiniteScrollingMode && chapters.length > 0) {
+      const timer = setTimeout(() => {
+        updateActiveChapterFromViewport();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [chapters, isInfiniteScrollingMode, updateActiveChapterFromViewport]);
 
   // Auto-scroll sidebar's active chapter item into view
   useEffect(() => {
@@ -1782,135 +1959,131 @@ export default function App() {
       {/* 1. SIDEBAR (Collapsible table of contents, search, import/export) */}
       <div 
         id="app-sidebar"
-        className={`fixed top-0 left-0 h-screen flex-shrink-0 border-r transition-all duration-300 flex flex-col overflow-hidden z-40 ${
+        className={`fixed top-0 left-0 h-screen flex-shrink-0 border-r border-white/10 transition-all duration-300 flex flex-col overflow-hidden z-40 bg-[#16181D] text-slate-100 ${
           isSidebarOpen 
-            ? 'w-80 opacity-100 translate-x-0 shadow-2xl' 
+            ? 'w-80 sm:w-88 md:w-[380px] lg:w-[420px] opacity-100 translate-x-0 shadow-2xl' 
             : 'w-0 opacity-0 pointer-events-none -translate-x-full'
         }`}
-        style={{ 
-          borderColor: currentTheme.border,
-          backgroundColor: currentTheme.sidebarBg
-        }}
       >
         {/* Sidebar Header */}
-        <div id="sidebar-header" className="p-4 border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: currentTheme.border }}>
-          <div className="flex items-center gap-2">
-            <BookOpen className="w-5 h-5" style={{ color: currentTheme.accent }} />
-            <input 
-              id="book-title-input"
-              type="text"
-              value={bookTitle}
-              onChange={(e) => setBookTitle(e.target.value)}
-              className="bg-transparent font-serif font-bold text-lg focus:outline-none focus:border-b w-48"
-              style={{ borderBottomColor: currentTheme.accent }}
-              title="Click to rename book"
-            />
+        <div id="sidebar-header" className="p-5 border-b border-white/10 flex items-center justify-between flex-shrink-0 bg-white/[0.02]">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-[#FF79B0]/15 text-[#FF79B0] border border-[#FF79B0]/25 shadow-sm">
+              <BookOpen className="w-5 h-5" />
+            </div>
+            <div className="flex flex-col">
+              <input 
+                id="book-title-input"
+                type="text"
+                value={bookTitle}
+                onChange={(e) => setBookTitle(e.target.value)}
+                className="bg-transparent font-serif font-bold text-base sm:text-lg text-white focus:outline-none focus:ring-1 focus:ring-[#FF79B0] rounded-lg px-1.5 py-0.5 border border-transparent hover:border-white/10 transition-all max-w-[200px] sm:max-w-[240px]"
+                title="Click to rename book"
+              />
+              <span className="text-[10px] text-white/40 pl-1.5 font-medium tracking-wide uppercase">Ebook Library</span>
+            </div>
           </div>
           <button 
             id="close-sidebar-btn"
             onClick={() => handleSetSidebarOpen(false)}
-            className="p-1.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10"
+            className="p-2 rounded-full bg-white/5 hover:bg-white/15 text-white/80 hover:text-white transition-all border border-white/10 cursor-pointer active:scale-95"
+            title="Close sidebar"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Navigation Tabs */}
-        <div id="sidebar-tabs" className="grid grid-cols-4 border-b text-xs text-center flex-shrink-0" style={{ borderColor: currentTheme.border }}>
-          <button 
-            id="tab-reader"
-            onClick={() => { setActiveTab('reader'); }}
-            className={`py-3 font-medium transition-colors ${activeTab === 'reader' ? 'border-b-2' : ''}`}
-            style={{ 
-              borderBottomColor: activeTab === 'reader' ? currentTheme.accent : 'transparent',
-              color: activeTab === 'reader' ? currentTheme.text : currentTheme.secondaryText,
-              textAlign: 'center',
-              fontSize: '13px'
-            }}
-          >
-            Home
-          </button>
-          <button 
-            id="tab-add"
-            onClick={() => { setActiveTab('add'); }}
-            className={`py-3 font-medium transition-colors ${activeTab === 'add' ? 'border-b-2' : ''}`}
-            style={{ 
-              borderBottomColor: activeTab === 'add' ? currentTheme.accent : 'transparent',
-              color: activeTab === 'add' ? currentTheme.text : currentTheme.secondaryText
-            }}
-          >
-            + Chapter
-          </button>
-          <button 
-            id="tab-paste"
-            onClick={() => { setActiveTab('paste'); }}
-            className={`py-3 font-medium transition-colors ${activeTab === 'paste' ? 'border-b-2' : ''}`}
-            style={{ 
-              borderBottomColor: activeTab === 'paste' ? currentTheme.accent : 'transparent',
-              color: activeTab === 'paste' ? currentTheme.text : currentTheme.secondaryText
-            }}
-          >
-            Paste Multi
-          </button>
-          <button 
-            id="tab-fetch"
-            onClick={() => { setActiveTab('fetch'); }}
-            className={`py-3 font-medium transition-colors ${activeTab === 'fetch' ? 'border-b-2' : ''}`}
-            style={{ 
-              borderBottomColor: activeTab === 'fetch' ? currentTheme.accent : 'transparent',
-              color: activeTab === 'fetch' ? currentTheme.text : currentTheme.secondaryText
-            }}
-          >
-            Auto Fetch
-          </button>
+        {/* Navigation Tabs Segmented Pill Bar */}
+        <div id="sidebar-tabs" className="px-5 py-3 border-b border-white/10 flex-shrink-0 bg-white/[0.01]">
+          <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white/5 border border-white/10">
+            <button 
+              id="tab-reader"
+              onClick={() => { setActiveTab('reader'); }}
+              className={`py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                activeTab === 'reader'
+                  ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                  : 'text-white/70 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              Home
+            </button>
+            <button 
+              id="tab-add"
+              onClick={() => { setActiveTab('add'); }}
+              className={`py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                activeTab === 'add'
+                  ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                  : 'text-white/70 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              + Chapter
+            </button>
+            <button 
+              id="tab-paste"
+              onClick={() => { setActiveTab('paste'); }}
+              className={`py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                activeTab === 'paste'
+                  ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                  : 'text-white/70 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              Paste Multi
+            </button>
+            <button 
+              id="tab-fetch"
+              onClick={() => { setActiveTab('fetch'); }}
+              className={`py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                activeTab === 'fetch'
+                  ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                  : 'text-white/70 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              Auto Fetch
+            </button>
+          </div>
         </div>
 
         {/* Sidebar Tab Contents */}
-        <div id="sidebar-content" className="flex-1 flex flex-col overflow-hidden p-4 select-text">
+        <div id="sidebar-content" className="flex-1 flex flex-col overflow-hidden p-5 select-text">
           
           {/* TAB: Table of Contents & Search */}
           {activeTab === 'reader' && (
             <div id="toc-container" className="flex flex-col flex-1 overflow-hidden space-y-4">
               {/* Search Box */}
               <div id="search-box" className="relative flex items-center">
-                <Search className="w-4 h-4 absolute left-3 pointer-events-none" style={{ color: currentTheme.secondaryText }} />
+                <Search className="w-5 h-5 absolute left-3.5 text-white/40 pointer-events-none" />
                 <input 
                   id="search-chapters-input"
                   type="text"
                   placeholder="Search title or content..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 rounded-lg text-sm bg-black/5 dark:bg-white/5 border focus:outline-none"
-                  style={{ borderColor: currentTheme.border }}
+                  className="w-full pl-11 pr-9 py-3 rounded-2xl text-sm bg-white/5 border border-white/15 text-white placeholder-white/40 focus:outline-none focus:border-[#FF79B0] focus:ring-2 focus:ring-[#FF79B0]/20 transition-all shadow-inner"
                 />
                 {searchQuery && (
                   <button 
                     id="clear-search-btn"
                     onClick={() => setSearchQuery('')}
-                    className="absolute right-3 p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                    className="absolute right-3 p-1 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all cursor-pointer"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
 
-
-
               {searchQuery ? (
                 <div id="search-results-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-3">
                   {/* Search Segment Tabs */}
-                  <div id="search-segment-tabs" className="flex border-b text-xs font-semibold flex-shrink-0" style={{ borderColor: currentTheme.border }}>
+                  <div id="search-segment-tabs" className="grid grid-cols-2 gap-1 p-1.5 rounded-2xl bg-white/5 border border-white/10 flex-shrink-0">
                     <button
                       id="search-mode-chapters-btn"
                       type="button"
                       onClick={() => setSearchMode('chapters')}
-                      className={`flex-1 py-2 text-center transition-all border-b-2 ${
-                        searchMode === 'chapters' ? 'border-b-2 font-bold' : 'opacity-60'
+                      className={`py-2 text-center text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                        searchMode === 'chapters'
+                          ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                          : 'text-white/70 hover:text-white hover:bg-white/5'
                       }`}
-                      style={{
-                        borderBottomColor: searchMode === 'chapters' ? currentTheme.accent : 'transparent',
-                        color: searchMode === 'chapters' ? currentTheme.text : currentTheme.secondaryText,
-                      }}
                     >
                       Chapters ({filteredChapters.length})
                     </button>
@@ -1918,13 +2091,11 @@ export default function App() {
                       id="search-mode-text-btn"
                       type="button"
                       onClick={() => setSearchMode('text')}
-                      className={`flex-1 py-2 text-center transition-all border-b-2 ${
-                        searchMode === 'text' ? 'border-b-2 font-bold' : 'opacity-60'
+                      className={`py-2 text-center text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                        searchMode === 'text'
+                          ? 'bg-[#FF79B0] text-slate-950 shadow-sm'
+                          : 'text-white/70 hover:text-white hover:bg-white/5'
                       }`}
-                      style={{
-                        borderBottomColor: searchMode === 'text' ? currentTheme.accent : 'transparent',
-                        color: searchMode === 'text' ? currentTheme.text : currentTheme.secondaryText,
-                      }}
                     >
                       Text Passages ({textMatches.length})
                     </button>
@@ -1934,37 +2105,54 @@ export default function App() {
                     /* Search Mode: Chapters List matching query */
                     <div id="search-chapters-results" className="flex-1 flex flex-col overflow-hidden">
                       {filteredChapters.length === 0 ? (
-                        <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
+                        <div className="text-center py-8 text-sm flex-1 text-white/50">
                           No chapters match your search.
                         </div>
                       ) : (
-                        <div id="search-chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
+                        <div id="search-chapters-list" className="space-y-3 flex-1 overflow-y-auto pr-1 custom-scrollbar">
                           {filteredChapters.map((chap) => {
-                            const isSelected = !isInfiniteScrollingMode && currentChapterIndex === chapters.indexOf(chap);
-                            const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === chapters.indexOf(chap);
+                            const chapterIdx = chapters.indexOf(chap);
+                            const isSelected = !isInfiniteScrollingMode && currentChapterIndex === chapterIdx;
+                            const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === chapterIdx;
+                            
+                            let displayTitle = chap.title;
+                            if (displayTitle.match(/^chapter\s+\d+[:\s-]/i)) {
+                              const parts = displayTitle.split(/[:\-]/);
+                              if (parts.length > 1) {
+                                displayTitle = parts.slice(1).join(':').trim();
+                              }
+                            }
+
                             return (
                               <div 
                                 id={`search-chapter-item-${chap.id}`}
                                 key={chap.id}
                                 onClick={() => {
-                                  setCurrentChapterIndex(chapters.indexOf(chap));
+                                  setCurrentChapterIndex(chapterIdx);
                                 }}
-                                className={`group w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between cursor-pointer ${
+                                className={`group w-full text-left p-4 rounded-2xl transition-all duration-200 relative overflow-hidden cursor-pointer ${
                                   isSelected 
-                                    ? 'bg-black/15 dark:bg-white/15 font-semibold border-l-4' 
+                                    ? 'bg-[#FF79B0]/15 border-[#FF79B0]/50 shadow-lg shadow-[#FF79B0]/10 scale-[1.01] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-1.5 before:bg-[#FF79B0] before:rounded-r-full' 
                                     : isHighlighted 
-                                      ? 'bg-black/5 dark:bg-white/5 border-l-4 border-dashed'
-                                      : 'hover:bg-black/5 dark:hover:bg-white/5'
+                                      ? 'bg-white/10 border-[#FF79B0]/30 border-dashed before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-1 before:bg-[#FF79B0]/60'
+                                      : 'bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01] active:scale-[0.99] shadow-sm'
                                 }`}
-                                style={{ 
-                                  borderLeftColor: (isSelected || isHighlighted) ? currentTheme.accent : 'transparent'
-                                }}
                               >
-                                <div className="flex-1 min-w-0 pr-2">
-                                  <div className="truncate font-medium">{chap.title}</div>
-                                  <div className="text-xs truncate" style={{ color: currentTheme.secondaryText }}>
-                                    {chap.content.length} paragraphs • #{chap.number}
-                                  </div>
+                                <div className="flex items-start justify-between gap-2 mb-1.5">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#FF79B0] flex items-center gap-1">
+                                    📖 Chapter {chap.number}
+                                  </span>
+                                  {isSelected && (
+                                    <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-widest rounded-md bg-[#FF79B0] text-slate-950 shadow-sm flex items-center gap-1 flex-shrink-0 animate-in fade-in">
+                                      Reading
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="font-bold text-sm text-white leading-snug mb-2 line-clamp-2">
+                                  {displayTitle}
+                                </div>
+                                <div className="text-xs text-white/50 pt-1 border-t border-white/5">
+                                  {chap.content.length} paragraphs
                                 </div>
                               </div>
                             );
@@ -1976,12 +2164,12 @@ export default function App() {
                     /* Search Mode: Text Matches matching query */
                     <div id="search-text-results" className="flex-1 flex flex-col overflow-hidden">
                       {textMatches.length === 0 ? (
-                        <div className="text-center py-8 text-sm flex-1 space-y-2" style={{ color: currentTheme.secondaryText }}>
+                        <div className="text-center py-8 text-sm flex-1 space-y-2 text-white/50">
                           <p>No matching text passages found.</p>
                           <p className="text-xs opacity-75">Try typing a more specific phrase.</p>
                         </div>
                       ) : (
-                        <div id="text-matches-list" className="space-y-2 flex-1 overflow-y-auto pr-1">
+                        <div id="text-matches-list" className="space-y-3 flex-1 overflow-y-auto pr-1 custom-scrollbar">
                           {textMatches.map((match, mIdx) => {
                             const isActiveChapter = currentChapterIndex === match.chapterIndex;
                             const isMatchHighlighted = highlightedParagraph?.chapterId === match.chapterId && highlightedParagraph?.paragraphIndex === match.paragraphIndex;
@@ -1990,22 +2178,21 @@ export default function App() {
                                 key={mIdx}
                                 type="button"
                                 onClick={() => handleJumpToParagraph(match.chapterId, match.paragraphIndex)}
-                                className={`w-full text-left p-2.5 rounded-lg text-xs border transition-all flex flex-col text-ellipsis overflow-hidden ${
+                                className={`w-full text-left p-3.5 rounded-2xl text-xs border transition-all duration-200 flex flex-col overflow-hidden cursor-pointer ${
                                   isMatchHighlighted 
-                                    ? 'bg-[#FF79B0]/20 border-[#FF79B0] ring-1 ring-[#FF79B0]/30 shadow-sm'
+                                    ? 'bg-[#FF79B0]/20 border-[#FF79B0] ring-1 ring-[#FF79B0]/40 shadow-md'
                                     : isActiveChapter
-                                      ? 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border-current/10'
-                                      : 'hover:bg-black/5 dark:hover:bg-white/5 border-transparent'
+                                      ? 'bg-white/10 hover:bg-white/15 border-white/20'
+                                      : 'bg-white/5 hover:bg-white/10 border-white/10'
                                 }`}
-                                style={{ borderColor: isMatchHighlighted ? undefined : currentTheme.border }}
                               >
-                                <div className="flex items-center justify-between font-semibold mb-1 w-full" style={{ color: currentTheme.accent }}>
-                                  <span className="truncate max-w-[170px]">{match.chapterTitle}</span>
-                                  <span className="text-[10px] opacity-75 whitespace-nowrap">Para {match.paragraphIndex + 1}</span>
+                                <div className="flex items-center justify-between font-bold mb-1.5 w-full text-[#FF79B0]">
+                                  <span className="truncate max-w-[190px]">📖 {match.chapterTitle}</span>
+                                  <span className="text-[10px] opacity-80 whitespace-nowrap bg-[#FF79B0]/15 px-1.5 py-0.5 rounded font-mono">Para {match.paragraphIndex + 1}</span>
                                 </div>
-                                <div className="leading-relaxed opacity-85 break-words select-none text-left" style={{ color: currentTheme.text }}>
+                                <div className="leading-relaxed text-white/80 break-words select-none text-left">
                                   <span>{match.previewBefore}</span>
-                                  <mark className="bg-[#FF79B0]/35 text-inherit font-bold px-0.5 rounded">{match.matchText}</mark>
+                                  <mark className="bg-[#FF79B0]/40 text-white font-bold px-1 rounded">{match.matchText}</mark>
                                   <span>{match.previewAfter}</span>
                                 </div>
                               </button>
@@ -2018,10 +2205,15 @@ export default function App() {
                 </div>
               ) : (
                 /* Chapters List (Normal T.O.C. when no Search Query) */
-                <div id="chapters-list-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-1">
-                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2 flex-shrink-0" style={{ color: currentTheme.secondaryText }}>
-                    <span>Chapters ({filteredChapters.length})</span>
+                <div id="chapters-list-wrapper" className="flex-1 flex flex-col overflow-hidden space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider mb-2 flex-shrink-0">
                     <div className="flex items-center gap-2">
+                      <span className="text-white/60 font-bold">Chapters</span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-[#FF79B0]/20 text-[#FF79B0] font-mono text-xs font-bold border border-[#FF79B0]/30">
+                        {filteredChapters.length}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
                       {chapters.length > 0 && (
                         <button
                           id="toggle-select-mode-btn"
@@ -2029,11 +2221,10 @@ export default function App() {
                             setIsSelectMode(!isSelectMode);
                             if (isSelectMode) setSelectedChapterIds([]);
                           }}
-                          className="text-[10px] hover:underline flex items-center gap-0.5"
-                          style={{ color: isSelectMode ? currentTheme.accent : undefined }}
+                          className="text-xs hover:underline flex items-center gap-1 text-[#FF79B0] font-medium cursor-pointer"
                           title="Toggle Multi-Select Mode to Delete, Edit or Copy multiple chapters"
                         >
-                          <CheckSquare className="w-2.5 h-2.5" />
+                          <CheckSquare className="w-3.5 h-3.5" />
                           {isSelectMode ? "Cancel Select" : "Select Mode"}
                         </button>
                       )}
@@ -2041,10 +2232,10 @@ export default function App() {
                         <button 
                           id="reset-library-btn"
                           onClick={handleResetLibrary}
-                          className="text-[10px] hover:underline flex items-center gap-0.5"
+                          className="text-xs hover:underline flex items-center gap-1 text-white/50 hover:text-white transition-colors cursor-pointer"
                           title="Clear all chapters in library"
                         >
-                          <RotateCcw className="w-2.5 h-2.5" />
+                          <RotateCcw className="w-3.5 h-3.5" />
                           Clear All
                         </button>
                       )}
@@ -2054,8 +2245,8 @@ export default function App() {
                   {/* Bulk Controls & Select All Options when in Select Mode */}
                   {isSelectMode && (
                     <div className="space-y-2 mb-2 animate-in fade-in slide-in-from-top-1 duration-150 flex-shrink-0">
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-black/5 dark:bg-white/5 text-xs">
-                        <label className="flex items-center gap-2 cursor-pointer font-medium select-none">
+                      <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/10 text-xs">
+                        <label className="flex items-center gap-2 cursor-pointer font-medium select-none text-white">
                           <input 
                             type="checkbox"
                             checked={selectedChapterIds.length === filteredChapters.length && filteredChapters.length > 0}
@@ -2066,14 +2257,14 @@ export default function App() {
                                 setSelectedChapterIds([]);
                               }
                             }}
-                            className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500"
+                            className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-[#FF79B0]"
                           />
                           <span>Select All ({selectedChapterIds.length} of {filteredChapters.length})</span>
                         </label>
                         {selectedChapterIds.length > 0 && (
                           <button 
                             onClick={() => setSelectedChapterIds([])}
-                            className="text-[10px] hover:underline opacity-80"
+                            className="text-[10px] hover:underline text-white/70"
                           >
                             Deselect All
                           </button>
@@ -2081,26 +2272,26 @@ export default function App() {
                       </div>
 
                       {selectedChapterIds.length > 0 && (
-                        <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-lg bg-black/10 dark:bg-white/10 border flex-shrink-0" style={{ borderColor: currentTheme.border }}>
+                        <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-xl bg-white/10 border border-white/10 flex-shrink-0">
                           <button
                             onClick={handleBulkCopy}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-[11px] font-bold text-[#FF79B0] transition-colors"
                             title="Copy content of selected chapters to clipboard"
                           >
-                            <Copy className="w-3 h-3" style={{ color: currentTheme.accent }} />
+                            <Copy className="w-3 h-3" />
                             Copy
                           </button>
                           <button
                             onClick={handleBulkEdit}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-black/5 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/15 text-[11px] font-semibold transition-colors"
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-[11px] font-bold text-[#FF79B0] transition-colors"
                             title="Edit prefix, title additions, offsets or content replacements in selected chapters"
                           >
-                            <Edit3 className="w-3 h-3" style={{ color: currentTheme.accent }} />
+                            <Edit3 className="w-3 h-3" />
                             Edit
                           </button>
                           <button
                             onClick={handleBulkDelete}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-rose-500/10 hover:bg-rose-500/25 text-rose-500 text-[11px] font-semibold transition-colors animate-pulse"
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 text-[11px] font-bold transition-colors animate-pulse"
                             title="Delete selected chapters"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -2112,15 +2303,25 @@ export default function App() {
                   )}
                   
                   {filteredChapters.length === 0 ? (
-                    <div className="text-center py-8 text-sm flex-1" style={{ color: currentTheme.secondaryText }}>
+                    <div className="text-center py-8 text-sm flex-1 text-white/50">
                       No chapters in your library yet. Add or scrape some!
                     </div>
                   ) : (
-                    <div id="chapters-list" className="space-y-1 flex-1 overflow-y-auto pr-1">
+                    <div id="chapters-list" className="space-y-3 flex-1 overflow-y-auto pr-1 custom-scrollbar">
                       {filteredChapters.map((chap, index) => {
+                        const chapterIdx = chapters.indexOf(chap);
                         const isSelected = !isInfiniteScrollingMode && currentChapterIndex === index;
                         const isHighlighted = isInfiniteScrollingMode && currentChapterIndex === index;
                         const isChecked = selectedChapterIds.includes(chap.id);
+
+                        let displayTitle = chap.title;
+                        if (displayTitle.match(/^chapter\s+\d+[:\s-]/i)) {
+                          const parts = displayTitle.split(/[:\-]/);
+                          if (parts.length > 1) {
+                            displayTitle = parts.slice(1).join(':').trim();
+                          }
+                        }
+
                         return (
                           <div 
                             id={`chapter-item-${chap.id}`}
@@ -2136,59 +2337,69 @@ export default function App() {
                                   }
                                 });
                               } else {
-                                setCurrentChapterIndex(chapters.indexOf(chap));
+                                setCurrentChapterIndex(chapterIdx);
                               }
                             }}
-                            className={`group w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between cursor-pointer ${
+                            className={`group w-full text-left p-4 rounded-2xl transition-all duration-200 relative overflow-hidden cursor-pointer ${
                               isSelectMode && isChecked
-                                ? 'bg-black/10 dark:bg-white/10 ring-1 ring-current/25 font-semibold'
+                                ? 'bg-white/10 border-[#FF79B0] ring-1 ring-[#FF79B0]/40 shadow-md scale-[1.01]'
                                 : isSelected 
-                                  ? 'bg-black/15 dark:bg-white/15 font-semibold border-l-4' 
+                                  ? 'bg-[#FF79B0]/15 border-[#FF79B0]/50 shadow-lg shadow-[#FF79B0]/10 scale-[1.01] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-1.5 before:bg-[#FF79B0] before:rounded-r-full' 
                                   : isHighlighted 
-                                    ? 'bg-black/5 dark:bg-white/5 border-l-4 border-dashed'
-                                    : 'hover:bg-black/5 dark:hover:bg-white/5'
+                                    ? 'bg-white/10 border-[#FF79B0]/30 border-dashed before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-1 before:bg-[#FF79B0]/60'
+                                    : 'bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01] active:scale-[0.99] shadow-sm'
                             }`}
-                            style={{ 
-                              borderLeftColor: (!isSelectMode && (isSelected || isHighlighted)) ? currentTheme.accent : 'transparent'
-                            }}
                           >
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              {isSelectMode && (
-                                <input 
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => {}} 
-                                  className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5 cursor-pointer accent-pink-500 mr-1 flex-shrink-0"
-                                />
+                            <div className="flex items-start justify-between gap-2 mb-1.5">
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {isSelectMode && (
+                                  <input 
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {}} 
+                                    className="rounded border-gray-300 text-pink-600 focus:ring-pink-500 w-4 h-4 cursor-pointer accent-[#FF79B0] flex-shrink-0 mt-0.5"
+                                  />
+                                )}
+                                <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#FF79B0] flex items-center gap-1">
+                                  📖 Chapter {chap.number}
+                                </span>
+                              </div>
+
+                              {isSelected && !isSelectMode && (
+                                <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-widest rounded-md bg-[#FF79B0] text-slate-950 shadow-sm flex items-center gap-1 flex-shrink-0 animate-in fade-in">
+                                  Reading
+                                </span>
                               )}
-                              <div className="flex-1 min-w-0 pr-2">
-                                <div className="truncate font-medium">{chap.title}</div>
-                                <div className="text-xs truncate" style={{ color: currentTheme.secondaryText }}>
-                                  {chap.content.length} paragraphs • #{chap.number}
-                                </div>
-                              </div>
                             </div>
-                            
-                            {!isSelectMode && (
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button 
-                                  id={`edit-chapter-${chap.id}`}
-                                  onClick={(e) => handleEditChapter(chap, e)}
-                                  className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-xs"
-                                  title="Edit Chapter"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-                                <button 
-                                  id={`delete-chapter-${chap.id}`}
-                                  onClick={(e) => handleDeleteChapter(chap.id, e)}
-                                  className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-rose-500 text-xs"
-                                  title="Delete Chapter"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            )}
+
+                            <div className="font-bold text-sm text-white leading-snug mb-2 line-clamp-2">
+                              {displayTitle}
+                            </div>
+
+                            <div className="flex items-center justify-between text-xs text-white/50 pt-2 border-t border-white/5">
+                              <span>{chap.content.length} paragraphs</span>
+
+                              {!isSelectMode && (
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button 
+                                    id={`edit-chapter-${chap.id}`}
+                                    onClick={(e) => handleEditChapter(chap, e)}
+                                    className="p-1 rounded-lg hover:bg-white/15 text-white/80 hover:text-white transition-colors"
+                                    title="Edit Chapter"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button 
+                                    id={`delete-chapter-${chap.id}`}
+                                    onClick={(e) => handleDeleteChapter(chap.id, e)}
+                                    className="p-1 rounded-lg hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 transition-colors"
+                                    title="Delete Chapter"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
@@ -2473,7 +2684,7 @@ export default function App() {
         ref={readerFrameRef} 
         className={`flex-1 flex flex-col relative min-w-0 transition-all duration-300 ${
           useWindowScrolling ? 'min-h-screen overflow-y-visible' : 'h-screen overflow-y-auto overflow-x-hidden'
-        } ${isSidebarOpen ? 'md:pl-80' : 'md:pl-0'}`}
+        } ${isSidebarOpen ? 'md:pl-[380px] lg:pl-[420px]' : 'md:pl-0'}`}
         style={frameEnabled ? frameStyles.outerStyle : {}}
       >
         
@@ -2791,7 +3002,7 @@ export default function App() {
                       Previous Chapter
                     </button>
                     <span className="text-xs font-mono" style={{ color: currentTheme.secondaryText }}>
-                      Chapter {currentChapterIndex + 1} of {chapters.length}
+                      Chapter {activeChapter ? activeChapter.number : currentChapterIndex + 1} ({currentChapterIndex + 1} of {chapters.length})
                     </span>
                     <button 
                       id="next-chapter-btn"
@@ -3046,37 +3257,49 @@ export default function App() {
         <div 
           id="reading-settings-overlay" 
           onClick={() => handleSetReadingSettingsOpen(false)}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+          className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-5 md:p-6 transition-all duration-300 animate-fade-in"
         >
           <div 
             id="reading-settings-modal"
             onClick={(e) => e.stopPropagation()} // Prevent close on click inside
-            className="w-full max-w-sm rounded-3xl border p-6 flex flex-col space-y-6 shadow-2xl relative"
+            className="w-full max-w-sm sm:max-w-md md:max-w-xl lg:max-w-2xl rounded-3xl border border-white/15 p-6 sm:p-8 flex flex-col space-y-7 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85)] relative overflow-hidden bg-[#181B22]/95 text-slate-100 transition-all duration-300 transform animate-in fade-in zoom-in-95"
             style={{ 
-              backgroundColor: '#1E2128', // Dark background matching Kindle/mockup exactly
               color: '#E2E8F0',
-              borderColor: 'rgba(255, 255, 255, 0.12)'
             }}
           >
+            {/* Subtle decorative ambient glow at top */}
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-24 bg-gradient-to-b from-[#FF79B0]/15 to-transparent blur-2xl pointer-events-none rounded-full" />
+
             {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <h3 className="text-base font-bold tracking-tight">Reading Settings</h3>
+            <div className="flex items-center justify-between pb-4 border-b border-white/10 relative z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-[#FF79B0]/15 text-[#FF79B0] border border-[#FF79B0]/25">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold tracking-tight text-white">Reading Settings</h3>
+                  <p className="text-[11px] text-white/50">Customize typography, theme, and layout</p>
+                </div>
+              </div>
               <button 
                 id="close-reading-settings-btn"
                 onClick={() => handleSetReadingSettingsOpen(false)}
-                className="p-1 rounded-full hover:bg-white/10 transition-colors"
+                className="p-2 rounded-full bg-white/5 hover:bg-white/15 text-white/80 hover:text-white transition-all transform active:scale-95 cursor-pointer border border-white/10"
+                title="Close settings"
               >
-                <X className="w-5 h-5 text-white/80" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Modal Body Scroll Container */}
-            <div className="space-y-6 overflow-y-auto max-h-[70vh] pr-1">
+            <div className="space-y-7 sm:space-y-8 overflow-y-auto max-h-[75vh] pr-2 custom-scrollbar relative z-10">
               
               {/* SECTION 1: Appearance & Page Color */}
-              <div className="space-y-3">
+              <div className="space-y-3.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60">Appearance</span>
+                  <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] flex items-center gap-1.5">
+                    Appearance & Theme
+                  </span>
                   <button 
                     onClick={() => {
                       // Cycle through default themes
@@ -3084,15 +3307,15 @@ export default function App() {
                       else if (theme === 'light') setTheme('sepia');
                       else setTheme('dark');
                     }}
-                    className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 transition-colors text-xs text-white"
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-all text-xs font-medium text-white shadow-sm hover:scale-105 active:scale-95 cursor-pointer border border-white/10"
                   >
                     <span>{theme === 'dark' ? '🌙 Dark mode' : theme === 'light' ? '☀️ Light mode' : theme === 'sepia' ? '🌾 Sepia mode' : '🎨 Custom mode'}</span>
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  <span className="text-xs text-white/60 block">Page Color</span>
-                  <div className="flex flex-wrap items-center gap-3">
+                <div className="space-y-2.5 p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <span className="text-xs font-medium text-white/70 block">Page Background Color</span>
+                  <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                     {COLOR_PRESETS.map((preset) => {
                       const isActive = currentTheme.bg.toLowerCase() === preset.hex.toLowerCase();
                       return (
@@ -3108,25 +3331,26 @@ export default function App() {
                               setCustomBgColor(preset.hex);
                             }
                           }}
-                          className={`w-8 h-8 rounded-full border-2 transition-all flex items-center justify-center relative ${
-                            isActive ? 'scale-110 shadow-lg' : 'hover:scale-105'
+                          className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full border-2 transition-all duration-200 flex items-center justify-center relative cursor-pointer shadow-md ${
+                            isActive 
+                              ? 'scale-110 ring-4 ring-[#FF79B0]/30 border-[#FF79B0] shadow-lg' 
+                              : 'hover:scale-105 border-white/20 hover:border-white/40'
                           }`}
                           style={{ 
                             backgroundColor: preset.hex,
-                            borderColor: isActive ? '#FF79B0' : 'rgba(255, 255, 255, 0.2)'
                           }}
                           title={preset.name}
                         >
                           {isActive && (
-                            <Check className="w-4 h-4" style={{ color: preset.hex === '#FFFFFF' || preset.hex === '#FAF5EB' || preset.hex === '#F3F4F6' ? '#000000' : '#FFFFFF' }} />
+                            <Check className="w-4 h-4 sm:w-5 sm:h-5 drop-shadow-sm" style={{ color: preset.hex === '#FFFFFF' || preset.hex === '#FAF5EB' || preset.hex === '#F3F4F6' ? '#000000' : '#FFFFFF' }} />
                           )}
                         </button>
                       );
                     })}
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
-                    <span className="text-xs text-white/50">Custom hex:</span>
+                  <div className="flex items-center gap-3 pt-2 border-t border-white/5">
+                    <span className="text-xs text-white/50">Custom Hex:</span>
                     <input 
                       type="text" 
                       value={customBgColor} 
@@ -3134,9 +3358,9 @@ export default function App() {
                         setCustomBgColor(e.target.value);
                         setTheme('custom');
                       }}
-                      className="w-20 px-2 py-0.5 rounded bg-white/5 text-white/90 border border-white/10 text-[11px] focus:outline-none focus:border-white/20 font-mono"
+                      className="w-24 px-2.5 py-1 rounded-lg bg-black/30 text-white/90 border border-white/15 text-xs focus:outline-none focus:border-[#FF79B0] font-mono transition-all"
                     />
-                    <div className="relative w-5 h-5 rounded overflow-hidden border border-white/20 flex-shrink-0">
+                    <div className="relative w-7 h-7 rounded-lg overflow-hidden border border-white/20 flex-shrink-0 cursor-pointer shadow-inner">
                       <input 
                         type="color" 
                         value={customBgColor.startsWith('#') && customBgColor.length === 7 ? customBgColor : '#1E2128'}
@@ -3154,8 +3378,8 @@ export default function App() {
 
               {/* SECTION 2: Font Style */}
               <div className="space-y-3">
-                <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Font Style</span>
-                <div className="grid grid-cols-2 gap-2">
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] block">Font Style</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {FONTS_LIST.map((f) => {
                     const isSelected = fontFamily === f.name;
                     return (
@@ -3163,74 +3387,86 @@ export default function App() {
                         key={f.name}
                         type="button"
                         onClick={() => setFontFamily(f.name)}
-                        className="flex flex-col items-start p-2.5 rounded-xl border text-left transition-all relative"
+                        className={`flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all duration-200 relative cursor-pointer ${
+                          isSelected 
+                            ? 'border-[#FF79B0] bg-[#FF79B0]/15 shadow-[0_0_15px_rgba(255,121,176,0.25)]' 
+                            : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20'
+                        }`}
                         style={{ 
-                          borderColor: isSelected ? '#FF79B0' : 'rgba(255, 255, 255, 0.1)',
-                          backgroundColor: isSelected ? 'rgba(255, 121, 176, 0.15)' : 'rgba(255, 255, 255, 0.05)',
                           fontFamily: FONT_MAP[f.name]
                         }}
                       >
-                        <span className="text-xs font-semibold text-white">
-                          {f.name}
-                        </span>
-                        <span className="text-[9px] opacity-50 text-white/70">
-                          {f.type}
-                        </span>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-white">
+                            {f.name}
+                          </span>
+                          <span className="text-[10px] opacity-60 text-white/80 font-sans">
+                            {f.type}
+                          </span>
+                        </div>
+                        {isSelected && (
+                          <div className="w-5 h-5 rounded-full bg-[#FF79B0] text-slate-900 flex items-center justify-center flex-shrink-0">
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </div>
+                        )}
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* SECTION 3: Font Size */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60">Font Size</span>
-                  <span className="text-xs font-mono text-white/90">{fontSize}px</span>
+              {/* SECTION 3 & 4: Font Size & Line Spacing Sliders */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Font Size */}
+                <div className="space-y-2 p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0]">Font Size</span>
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#FF79B0]/20 text-[#FF79B0] font-mono text-xs font-bold border border-[#FF79B0]/30">{fontSize}px</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="14"
+                    max="28"
+                    value={fontSize}
+                    onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
+                    className="w-full h-2 bg-white/15 rounded-lg appearance-none cursor-pointer accent-[#FF79B0] hover:bg-white/25 transition-all"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/40 font-mono">
+                    <span>14px</span>
+                    <span>28px</span>
+                  </div>
                 </div>
-                <input 
-                  type="range"
-                  min="14"
-                  max="28"
-                  value={fontSize}
-                  onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
-                  className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#FF79B0]"
-                />
-                <div className="flex justify-between text-[10px] text-white/40">
-                  <span>14px</span>
-                  <span>28px</span>
-                </div>
-              </div>
 
-              {/* SECTION 4: Line Spacing */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60">Line Spacing</span>
-                  <span className="text-xs font-mono text-white/90">{lineHeight}</span>
-                </div>
-                <input 
-                  type="range"
-                  min="1.3"
-                  max="2.4"
-                  step="0.1"
-                  value={lineHeight}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    setLineHeight(val);
-                    setParagraphSpacing(val * 1.25);
-                  }}
-                  className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#FF79B0]"
-                />
-                <div className="flex justify-between text-[10px] text-white/40">
-                  <span>Compact</span>
-                  <span>Airy</span>
+                {/* Line Spacing */}
+                <div className="space-y-2 p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0]">Line Spacing</span>
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#FF79B0]/20 text-[#FF79B0] font-mono text-xs font-bold border border-[#FF79B0]/30">{lineHeight}</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="1.3"
+                    max="2.4"
+                    step="0.1"
+                    value={lineHeight}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setLineHeight(val);
+                      setParagraphSpacing(val * 1.25);
+                    }}
+                    className="w-full h-2 bg-white/15 rounded-lg appearance-none cursor-pointer accent-[#FF79B0] hover:bg-white/25 transition-all"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/40">
+                    <span>Compact (1.3)</span>
+                    <span>Airy (2.4)</span>
+                  </div>
                 </div>
               </div>
 
               {/* SECTION 5: Page Width */}
-              <div className="space-y-2">
-                <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Page Width</span>
-                <div className="grid grid-cols-4 gap-1 p-0.5 rounded-lg bg-white/5 border border-white/10">
+              <div className="space-y-2.5">
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] block">Page Reading Width</span>
+                <div className="grid grid-cols-4 gap-1.5 p-1.5 rounded-2xl bg-white/5 border border-white/10">
                   {(['narrow', 'medium', 'wide', 'full'] as const).map((w) => {
                     const isSelected = pageWidth === w;
                     return (
@@ -3238,8 +3474,10 @@ export default function App() {
                         key={w}
                         type="button"
                         onClick={() => setPageWidth(w)}
-                        className={`py-1.5 rounded text-[10px] font-bold uppercase tracking-wider transition-all ${
-                          isSelected ? 'bg-[#FF79B0] text-slate-900 shadow' : 'text-white/70 hover:text-white'
+                        className={`py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer ${
+                          isSelected 
+                            ? 'bg-[#FF79B0] text-slate-950 shadow-md scale-[1.02]' 
+                            : 'text-white/70 hover:text-white hover:bg-white/5'
                         }`}
                       >
                         {w}
@@ -3249,112 +3487,117 @@ export default function App() {
                 </div>
               </div>
 
-              {/* SECTION 6: Infinite Scroll */}
-              <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                <div>
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Infinite Scroll</span>
-                  <span className="text-[10px] text-white/40">
-                    All chapters flow continuously
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setInfiniteScroll(!infiniteScroll)}
-                  className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
-                  style={{ 
-                    backgroundColor: infiniteScroll ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
-                  }}
-                >
-                  <div 
-                    className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
-                      infiniteScroll ? 'translate-x-4.5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* SECTION 6.5: Listen Mode */}
-              <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                <div>
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Listen Mode</span>
-                  <span className="text-[10px] text-white/40">
-                    Optimized for Edge's "Listen to this page"
-                  </span>
-                </div>
-                <button
-                  id="settings-listen-mode-btn"
-                  type="button"
-                  onClick={() => setListenMode(!listenMode)}
-                  className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
-                  style={{ 
-                    backgroundColor: listenMode ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
-                  }}
-                >
-                  <div 
-                    className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
-                      listenMode ? 'translate-x-4.5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* SECTION 6.6: Distraction-Free Mode */}
-              <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                <div>
-                  <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Distraction-Free Mode</span>
-                  <span className="text-[10px] text-white/40">
-                    Hide header controls while reading
-                  </span>
-                </div>
-                <button
-                  id="settings-distraction-free-btn"
-                  type="button"
-                  onClick={() => handleSetDistractionFree(!isDistractionFree)}
-                  className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
-                  style={{ 
-                    backgroundColor: isDistractionFree ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
-                  }}
-                >
-                  <div 
-                    className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
-                      isDistractionFree ? 'translate-x-4.5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* SECTION 7: Aesthetic Book-Page Framing */}
-              <div className="space-y-3 pt-3 border-t border-white/5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-xs uppercase font-bold tracking-wider text-white/60 block">Book-Page Framing</span>
-                    <span className="text-[10px] text-white/40">
-                      Wrap chapters in a premium book page sheet
-                    </span>
+              {/* SECTION 6: Mode Toggles (Grid on Tablets) */}
+              <div className="space-y-3">
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] block">Reading Modes & Layout</span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {/* Infinite Scroll */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/[0.07] transition-all">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Infinite Scroll</span>
+                      <span className="text-[10px] text-white/50 block mt-0.5">
+                        All chapters flow continuously
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setInfiniteScroll(!infiniteScroll)}
+                      className="w-12 h-6.5 rounded-full transition-all duration-200 relative flex items-center p-1 cursor-pointer flex-shrink-0"
+                      style={{ 
+                        backgroundColor: infiniteScroll ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                      }}
+                    >
+                      <div 
+                        className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow-md transition-transform duration-200 ${
+                          infiniteScroll ? 'translate-x-5.5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setFrameEnabled(!frameEnabled)}
-                    className="w-10 h-5.5 rounded-full transition-colors relative flex items-center p-0.5"
-                    style={{ 
-                      backgroundColor: frameEnabled ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
-                    }}
-                  >
-                    <div 
-                      className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow transition-transform ${
-                        frameEnabled ? 'translate-x-4.5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
+
+                  {/* Listen Mode */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/[0.07] transition-all">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Listen Mode</span>
+                      <span className="text-[10px] text-white/50 block mt-0.5">
+                        Optimized for Edge read aloud
+                      </span>
+                    </div>
+                    <button
+                      id="settings-listen-mode-btn"
+                      type="button"
+                      onClick={() => setListenMode(!listenMode)}
+                      className="w-12 h-6.5 rounded-full transition-all duration-200 relative flex items-center p-1 cursor-pointer flex-shrink-0"
+                      style={{ 
+                        backgroundColor: listenMode ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                      }}
+                    >
+                      <div 
+                        className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow-md transition-transform duration-200 ${
+                          listenMode ? 'translate-x-5.5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Distraction-Free Mode */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/[0.07] transition-all">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Distraction-Free</span>
+                      <span className="text-[10px] text-white/50 block mt-0.5">
+                        Hide header controls while reading
+                      </span>
+                    </div>
+                    <button
+                      id="settings-distraction-free-btn"
+                      type="button"
+                      onClick={() => handleSetDistractionFree(!isDistractionFree)}
+                      className="w-12 h-6.5 rounded-full transition-all duration-200 relative flex items-center p-1 cursor-pointer flex-shrink-0"
+                      style={{ 
+                        backgroundColor: isDistractionFree ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                      }}
+                    >
+                      <div 
+                        className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow-md transition-transform duration-200 ${
+                          isDistractionFree ? 'translate-x-5.5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Aesthetic Book-Page Framing Toggle */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/[0.07] transition-all">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Book-Page Framing</span>
+                      <span className="text-[10px] text-white/50 block mt-0.5">
+                        Wrap chapters in book sheet card
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFrameEnabled(!frameEnabled)}
+                      className="w-12 h-6.5 rounded-full transition-all duration-200 relative flex items-center p-1 cursor-pointer flex-shrink-0"
+                      style={{ 
+                        backgroundColor: frameEnabled ? '#FF79B0' : 'rgba(255, 255, 255, 0.15)'
+                      }}
+                    >
+                      <div 
+                        className={`w-4.5 h-4.5 rounded-full bg-slate-900 shadow-md transition-transform duration-200 ${
+                          frameEnabled ? 'translate-x-5.5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
 
+                {/* Extended Book Framing Options */}
                 {frameEnabled && (
-                  <div className="space-y-4 p-3.5 rounded-2xl bg-white/5 border border-white/10 animate-fade-in text-xs">
+                  <div className="space-y-4 p-4 rounded-2xl bg-white/5 border border-white/15 animate-fade-in text-xs mt-2">
                     {/* Sheet Width Slider */}
-                    <div className="space-y-2 pb-2 border-b border-white/5">
-                      <div className="flex justify-between items-center text-[10px] text-white/50 uppercase font-bold tracking-wider">
+                    <div className="space-y-2 pb-3 border-b border-white/10">
+                      <div className="flex justify-between items-center text-[10px] text-white/60 uppercase font-bold tracking-wider">
                         <span>Sheet Width</span>
-                        <span className="text-[#FF79B0] font-mono text-xs">{frameWidth}%</span>
+                        <span className="text-[#FF79B0] font-mono text-xs font-bold">{frameWidth}%</span>
                       </div>
                       <input 
                         id="settings-frame-width-slider"
@@ -3364,20 +3607,19 @@ export default function App() {
                         step="5"
                         value={frameWidth}
                         onChange={(e) => setFrameWidth(parseInt(e.target.value, 10))}
-                        className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#FF79B0]"
+                        className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#FF79B0] hover:bg-white/30 transition-all"
                       />
-                      <div className="grid grid-cols-6 gap-0.5 text-center mt-1">
+                      <div className="grid grid-cols-6 gap-1 text-center mt-1.5">
                         {([70, 80, 90, 95, 100, 105] as const).map((w) => (
                           <button
                             key={w}
                             type="button"
                             onClick={() => setFrameWidth(w)}
-                            className={`py-0.5 rounded text-[8px] font-bold transition-all border ${
+                            className={`py-1 rounded-lg text-[9px] font-bold transition-all border cursor-pointer ${
                               frameWidth === w 
-                                ? 'bg-[#FF79B0]/20 text-[#FF79B0] border-[#FF79B0]/40' 
+                                ? 'bg-[#FF79B0]/20 text-[#FF79B0] border-[#FF79B0]/50' 
                                 : 'text-white/40 border-transparent hover:text-white hover:bg-white/5'
                             }`}
-                            title={w === 70 ? 'Narrow book page' : w === 100 ? 'Standard full' : undefined}
                           >
                             {w}%
                           </button>
@@ -3386,9 +3628,9 @@ export default function App() {
                     </div>
 
                     {/* Theme / Preset Selection */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Sheet Theme</span>
-                      <div className="grid grid-cols-5 gap-1">
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-white/60 uppercase font-bold tracking-wider block">Sheet Theme</span>
+                      <div className="grid grid-cols-5 gap-1.5">
                         {(['cream', 'paper', 'amber', 'dark', 'match'] as const).map((t) => {
                           const isSelected = frameTheme === t;
                           return (
@@ -3396,8 +3638,8 @@ export default function App() {
                               key={t}
                               type="button"
                               onClick={() => setFrameTheme(t)}
-                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              className={`py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-950 border-[#FF79B0] shadow-sm' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
                               }`}
                             >
                               {t}
@@ -3408,9 +3650,9 @@ export default function App() {
                     </div>
 
                     {/* Radius / Corners */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Corner Radius</span>
-                      <div className="grid grid-cols-6 gap-1">
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-white/60 uppercase font-bold tracking-wider block">Corner Radius</span>
+                      <div className="grid grid-cols-6 gap-1.5">
                         {(['none', 'sm', 'md', 'lg', 'xl', '2xl'] as const).map((r) => {
                           const isSelected = frameRadius === r;
                           return (
@@ -3418,8 +3660,8 @@ export default function App() {
                               key={r}
                               type="button"
                               onClick={() => setFrameRadius(r)}
-                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              className={`py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-950 border-[#FF79B0] shadow-sm' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
                               }`}
                             >
                               {r}
@@ -3430,9 +3672,9 @@ export default function App() {
                     </div>
 
                     {/* Borders */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Sheet Border</span>
-                      <div className="grid grid-cols-5 gap-1">
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-white/60 uppercase font-bold tracking-wider block">Sheet Border</span>
+                      <div className="grid grid-cols-5 gap-1.5">
                         {(['none', 'thin', 'medium', 'double', 'ornament'] as const).map((b) => {
                           const isSelected = frameBorder === b;
                           return (
@@ -3440,10 +3682,9 @@ export default function App() {
                               key={b}
                               type="button"
                               onClick={() => setFrameBorder(b)}
-                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              className={`py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-950 border-[#FF79B0] shadow-sm' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
                               }`}
-                              title={b === 'ornament' ? 'Adds a vintage dual inner border ring' : undefined}
                             >
                               {b}
                             </button>
@@ -3453,9 +3694,9 @@ export default function App() {
                     </div>
 
                     {/* Shadows */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Drop Shadow</span>
-                      <div className="grid grid-cols-4 gap-1">
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-white/60 uppercase font-bold tracking-wider block">Drop Shadow</span>
+                      <div className="grid grid-cols-4 gap-1.5">
                         {(['none', 'soft', 'medium', 'deep'] as const).map((s) => {
                           const isSelected = frameShadow === s;
                           return (
@@ -3463,8 +3704,8 @@ export default function App() {
                               key={s}
                               type="button"
                               onClick={() => setFrameShadow(s)}
-                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              className={`py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-950 border-[#FF79B0] shadow-sm' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
                               }`}
                             >
                               {s}
@@ -3475,9 +3716,9 @@ export default function App() {
                     </div>
 
                     {/* Padding / Margins */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-white/50 uppercase font-bold tracking-wider block">Page Padding</span>
-                      <div className="grid grid-cols-3 gap-1">
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-white/60 uppercase font-bold tracking-wider block">Page Padding</span>
+                      <div className="grid grid-cols-3 gap-1.5">
                         {(['compact', 'standard', 'relaxed'] as const).map((p) => {
                           const isSelected = framePadding === p;
                           return (
@@ -3485,8 +3726,8 @@ export default function App() {
                               key={p}
                               type="button"
                               onClick={() => setFramePadding(p)}
-                              className={`py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                isSelected ? 'bg-[#FF79B0] text-slate-900 border-[#FF79B0]' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
+                              className={`py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                                isSelected ? 'bg-[#FF79B0] text-slate-950 border-[#FF79B0] shadow-sm' : 'text-white/70 hover:text-white border-white/10 bg-white/5'
                               }`}
                             >
                               {p}
@@ -3499,27 +3740,27 @@ export default function App() {
                 )}
               </div>
 
-              {/* SECTION 8: Save Current Settings as Default */}
-              <div className="pt-4 border-t border-white/10 flex flex-col gap-2">
+              {/* SECTION 8: Action Buttons (Save / Restore Profile Defaults) */}
+              <div className="pt-5 border-t border-white/10 flex flex-col gap-3">
                 <button
                   type="button"
                   id="reset-reading-settings-btn"
                   onClick={handleSaveAsDefault}
-                  className="w-full py-2.5 rounded-xl bg-[#FF79B0] hover:bg-[#FF79B0]/90 text-slate-900 font-bold text-xs uppercase tracking-wider transition-all border border-transparent flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-lg"
+                  className="w-full py-3.5 rounded-2xl bg-[#FF79B0] hover:bg-[#FF79B0]/90 text-slate-950 font-extrabold text-xs sm:text-sm uppercase tracking-wider transition-all border border-transparent flex items-center justify-center gap-2 active:scale-98 cursor-pointer shadow-[0_10px_20px_-5px_rgba(255,121,176,0.3)]"
                   title="Save your current theme, fonts, framing & scrolling configuration as your new default settings profile"
                 >
-                  <CheckSquare className="w-3.5 h-3.5" />
-                  Save Settings as Default
+                  <CheckSquare className="w-4 h-4" />
+                  Save Settings as Default Profile
                 </button>
-                <div className="flex items-center justify-between mt-1 px-1 text-[10px] text-white/40">
+                <div className="flex items-center justify-between px-1 text-xs text-white/50">
                   <button
                     type="button"
                     onClick={handleRestoreDefaults}
-                    className="hover:underline hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                    className="hover:underline hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
                     title="Restore your reading appearance to your saved default settings"
                   >
-                    <RotateCcw className="w-2.5 h-2.5" />
-                    Load Default Settings
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Load Saved Profile
                   </button>
                   <button
                     type="button"
@@ -3527,12 +3768,10 @@ export default function App() {
                     className="hover:underline hover:text-[#FF79B0] transition-colors cursor-pointer"
                     title="Wipe custom defaults and return to original factory dark theme settings"
                   >
-                    Reset to Factory Defaults
+                    Reset Factory Defaults
                   </button>
                 </div>
               </div>
-
-
 
             </div>
           </div>
