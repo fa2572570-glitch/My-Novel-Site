@@ -13,6 +13,7 @@ import {
   X, 
   ChevronLeft, 
   ChevronRight, 
+  ChevronDown,
   Check, 
   Sparkles, 
   EyeOff, 
@@ -294,6 +295,8 @@ export default function App() {
   const [highlightedParagraph, setHighlightedParagraph] = useState<{ chapterId: string; paragraphIndex: number } | null>(null);
   const [isDistractionFree, setIsDistractionFree] = useState(false);
   const [isReadingSettingsOpen, setIsReadingSettingsOpen] = useState(false);
+  const [isQuickNavOpen, setIsQuickNavOpen] = useState(false);
+  const [quickNavSearch, setQuickNavSearch] = useState('');
 
   // Sequential click/tap tracker for Exit Fullscreen button in distraction-free mode
   const [dfClickCount, setDfClickCount] = useState(0);
@@ -867,7 +870,7 @@ export default function App() {
 
   // Determine which chapter is currently visible in the viewport and update active index
   const updateActiveChapterFromViewport = useCallback(() => {
-    if (!isInfiniteScrollingMode || chapters.length === 0) return;
+    if (!useWindowScrolling || chapters.length === 0) return;
     if (isProgrammaticScrolling.current) return;
 
     const articles = document.querySelectorAll('.chapter-article');
@@ -916,7 +919,7 @@ export default function App() {
       isScrollingFromObserver.current = true;
       setCurrentChapterIndex(bestIndex);
     }
-  }, [isInfiniteScrollingMode, chapters]);
+  }, [useWindowScrolling, chapters]);
 
   // Load last scroll position or scroll to top on chapter change
   useEffect(() => {
@@ -978,10 +981,11 @@ export default function App() {
   // Handle scroll tracking to auto-save position and update active chapter on scroll
   useEffect(() => {
     const handleScroll = () => {
-      if (listenMode) return;
-      if (isInfiniteScrollingMode) {
+      if (useWindowScrolling) {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
-        localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
+        if (isInfiniteScrollingMode) {
+          localStorage.setItem(`scroll_pos_infinite`, scrollTop.toString());
+        }
         if (!isProgrammaticScrolling.current) {
           updateActiveChapterFromViewport();
         }
@@ -2692,49 +2696,62 @@ export default function App() {
         {!isDistractionFree && (
           <header 
             id="reader-top-bar"
-            className="p-4 border-b flex items-center justify-between flex-shrink-0 sticky top-0 z-30 select-none transition-all"
+            className="px-3 sm:px-6 py-3 border-b flex items-center justify-between flex-shrink-0 sticky top-0 z-30 select-none backdrop-blur-md shadow-sm transition-all gap-2 sm:gap-4"
             style={{ 
               borderColor: currentTheme.border,
-              backgroundColor: currentTheme.bg,
+              backgroundColor: currentTheme.bg === '#111827' || currentTheme.bg === '#000000' || currentTheme.bg.startsWith('#1') 
+                ? `${currentTheme.bg}E6` 
+                : `${currentTheme.bg}F2`,
               color: currentTheme.text
             }}
           >
-            {/* Left side: Menu button + Current active chapter title */}
-            <div className="flex items-center gap-3 min-w-0">
+            {/* Left side: Menu button + Chapter Title Quick Nav trigger */}
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <button 
                 id="toggle-sidebar-btn-header"
                 onClick={() => handleSetSidebarOpen(!isSidebarOpen)}
-                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex-shrink-0"
+                className="p-2 sm:p-2.5 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 transition-all duration-150 flex-shrink-0 cursor-pointer"
                 title="Toggle Table of Contents Sidebar"
               >
                 <Menu className="w-5 h-5" />
               </button>
               
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-serif font-semibold text-sm md:text-base truncate opacity-90">
+              {/* Quick Chapter Navigator Trigger (Title Button) */}
+              <button
+                id="header-chapter-title-btn"
+                onClick={() => setIsQuickNavOpen(!isQuickNavOpen)}
+                className="group flex items-center gap-2 min-w-0 py-1 px-2 sm:px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 border border-transparent hover:border-current/10 transition-all cursor-pointer text-left max-w-[280px] sm:max-w-[450px] md:max-w-[600px] lg:max-w-[750px]"
+                title="Click to open Quick Chapter Navigator"
+              >
+                <div 
+                  key={activeChapter?.id || 'book-title'} 
+                  className="animate-in fade-in slide-in-from-top-1 duration-200 truncate font-serif font-bold text-sm sm:text-base md:text-lg tracking-tight flex-1 min-w-0"
+                >
                   {activeChapter ? activeChapter.title : bookTitle}
-                </span>
-                {!listenMode && infiniteScroll && (
-                  <span className="hidden sm:inline-block text-[10px] px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/10 uppercase tracking-wider font-semibold opacity-75">
-                    Infinite Mode
-                  </span>
-                )}
-              </div>
+                </div>
+                <ChevronDown className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-y-0.5 transition-all flex-shrink-0" />
+              </button>
             </div>
 
-            {/* Right side: Search and Aa / Settings */}
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              {/* Reading Mode Toggle Button */}
+            {/* Right side: Infinity Toggle, Search, and Aa Settings */}
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+              {/* Reading Mode / Infinity Mode Toggle Button */}
               <button 
                 id="reading-mode-toggle-btn"
                 onClick={handleToggleReadingMode}
-                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center justify-center"
+                className="p-2 sm:p-2.5 rounded-xl transition-all duration-150 flex items-center gap-1.5 cursor-pointer active:scale-95 bg-[#FF79B0]/20 text-[#FF79B0] border border-[#FF79B0]/40 shadow-sm shadow-[#FF79B0]/20 ring-1 ring-[#FF79B0]/30 font-bold hover:bg-[#FF79B0]/30 hover:border-[#FF79B0]/60"
                 title={listenMode ? "Switch to Infinite Scroll Mode" : "Switch to Read Aloud / Listen Mode"}
               >
                 {listenMode ? (
-                  <ReadAloudIcon className="w-4.5 h-4.5" />
+                  <>
+                    <ReadAloudIcon className="w-4.5 h-4.5 animate-pulse" />
+                    <span className="hidden md:inline-block text-xs font-bold">Read Aloud</span>
+                  </>
                 ) : (
-                  <Infinity className="w-4.5 h-4.5" />
+                  <>
+                    <Infinity className="w-4.5 h-4.5 animate-pulse" />
+                    <span className="hidden md:inline-block text-xs font-bold">Infinity</span>
+                  </>
                 )}
               </button>
 
@@ -2744,12 +2761,11 @@ export default function App() {
                 onClick={() => {
                   handleSetSidebarOpen(true);
                   setActiveTab('reader');
-                  // focus the search input after a microtask
                   setTimeout(() => {
                     document.getElementById('search-chapters-input')?.focus();
                   }, 100);
                 }}
-                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                className="p-2 sm:p-2.5 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 transition-all duration-150 cursor-pointer"
                 title="Search Library"
               >
                 <Search className="w-4.5 h-4.5" />
@@ -2759,7 +2775,7 @@ export default function App() {
               <button 
                 id="reading-settings-btn"
                 onClick={() => handleSetReadingSettingsOpen(true)}
-                className="p-2 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex items-center gap-1.5 text-sm font-semibold border border-transparent hover:border-current/10"
+                className="p-2 sm:p-2.5 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 transition-all duration-150 flex items-center gap-1.5 text-sm font-semibold border border-transparent hover:border-current/10 cursor-pointer"
                 style={{ color: currentTheme.accent }}
                 title="Adjust Text, Theme, and Layout Settings"
               >
@@ -2767,6 +2783,143 @@ export default function App() {
               </button>
             </div>
           </header>
+        )}
+
+        {/* Quick Chapter Navigator Modal/Popup */}
+        {isQuickNavOpen && (
+          <div 
+            id="quick-nav-backdrop" 
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center pt-16 sm:pt-20 px-4 animate-in fade-in duration-200"
+            onClick={() => setIsQuickNavOpen(false)}
+          >
+            <div 
+              id="quick-nav-dialog"
+              className="w-full max-w-lg rounded-2xl border shadow-2xl p-5 space-y-4 text-slate-100 bg-[#16181D] border-white/15 animate-in zoom-in-95 duration-200 select-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-[#FF79B0]/20 text-[#FF79B0]">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-bold text-base text-white font-serif">Quick Chapter Navigator</h3>
+                </div>
+                <button 
+                  onClick={() => setIsQuickNavOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Active Chapter Card with Prev / Next Navigation */}
+              <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                <div className="flex items-center justify-between text-xs text-[#FF79B0] font-bold uppercase tracking-wider">
+                  <span>Current Chapter</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-[#FF79B0]/20 text-[#FF79B0] text-[10px] font-mono border border-[#FF79B0]/30">
+                    {currentChapterIndex + 1} of {chapters.length}
+                  </span>
+                </div>
+                <div className="font-serif font-bold text-base sm:text-lg text-white leading-snug">
+                  {activeChapter ? activeChapter.title : bookTitle}
+                </div>
+
+                {/* Prev / Next buttons */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button 
+                    disabled={currentChapterIndex <= 0}
+                    onClick={() => {
+                      if (currentChapterIndex > 0) {
+                        setCurrentChapterIndex(currentChapterIndex - 1);
+                      }
+                    }}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      currentChapterIndex <= 0
+                        ? 'opacity-40 cursor-not-allowed bg-white/5 text-white/40'
+                        : 'bg-white/10 hover:bg-white/20 text-white active:scale-95'
+                    }`}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Previous Chapter</span>
+                  </button>
+
+                  <button 
+                    disabled={currentChapterIndex >= chapters.length - 1}
+                    onClick={() => {
+                      if (currentChapterIndex < chapters.length - 1) {
+                        setCurrentChapterIndex(currentChapterIndex + 1);
+                      }
+                    }}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      currentChapterIndex >= chapters.length - 1
+                        ? 'opacity-40 cursor-not-allowed bg-white/5 text-white/40'
+                        : 'bg-[#FF79B0] hover:bg-[#FF79B0]/90 text-slate-950 shadow-sm active:scale-95'
+                    }`}
+                  >
+                    <span>Next Chapter</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Search */}
+              <div className="relative flex items-center">
+                <Search className="w-4 h-4 absolute left-3.5 text-white/40 pointer-events-none" />
+                <input 
+                  type="text"
+                  placeholder="Filter chapters..."
+                  value={quickNavSearch}
+                  onChange={(e) => setQuickNavSearch(e.target.value)}
+                  className="w-full pl-9 pr-8 py-2.5 rounded-xl text-xs bg-white/5 border border-white/15 text-white placeholder-white/40 focus:outline-none focus:border-[#FF79B0] focus:ring-1 focus:ring-[#FF79B0]/30 transition-all"
+                />
+                {quickNavSearch && (
+                  <button 
+                    onClick={() => setQuickNavSearch('')}
+                    className="absolute right-2.5 p-1 rounded-full bg-white/10 text-white/70 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Chapter Jump List */}
+              <div className="max-h-60 overflow-y-auto pr-1 space-y-1.5 custom-scrollbar">
+                {chapters
+                  .filter(chap => !quickNavSearch || chap.title.toLowerCase().includes(quickNavSearch.toLowerCase()) || chap.number.toString().includes(quickNavSearch))
+                  .map((chap) => {
+                    const index = chapters.indexOf(chap);
+                    const isSelected = currentChapterIndex === index;
+                    return (
+                      <button
+                        key={chap.id}
+                        onClick={() => {
+                          setCurrentChapterIndex(index);
+                          setIsQuickNavOpen(false);
+                          setQuickNavSearch('');
+                        }}
+                        className={`w-full text-left p-3 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#FF79B0]/20 border border-[#FF79B0]/50 text-white font-bold shadow-sm'
+                            : 'bg-white/5 hover:bg-white/10 border border-white/5 text-white/80 hover:text-white'
+                        }`}
+                      >
+                        <span className="truncate pr-2">📖 Chapter {chap.number}: {chap.title}</span>
+                        {isSelected ? (
+                          <span className="px-2 py-0.5 text-[10px] bg-[#FF79B0] text-slate-950 font-extrabold rounded flex-shrink-0">
+                            Reading
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-white/40 font-mono flex-shrink-0">
+                            {chap.content.length} paras
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Floating Indicator when in Distraction-Free Mode */}
