@@ -32,8 +32,13 @@ import {
   Palette,
   Headphones,
   Infinity,
-  Sliders
+  Sliders,
+  ArrowRight
 } from 'lucide-react';
+import { TerminologyRule, IgnoreTerm } from './types/terminology';
+import { applyTerminology, getDefaultTerminologyRules, getDefaultIgnoreTerms } from './utils/terminology';
+import { TerminologyManagerModal } from './components/TerminologyManagerModal';
+import { TerminologyErrorBoundary } from './components/TerminologyErrorBoundary';
 
 // Define Interface for Chapter
 interface Chapter {
@@ -297,6 +302,99 @@ export default function App() {
   const [isReadingSettingsOpen, setIsReadingSettingsOpen] = useState(false);
   const [isQuickNavOpen, setIsQuickNavOpen] = useState(false);
   const [quickNavSearch, setQuickNavSearch] = useState('');
+
+  // --- TERMINOLOGY MANAGER STATE ---
+  const [isTerminologyEnabled, setIsTerminologyEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('novel_terminology_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [terminologyRules, setTerminologyRules] = useState<TerminologyRule[]>(() => {
+    try {
+      const saved = localStorage.getItem('novel_terminology_rules');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((r): r is TerminologyRule => Boolean(r && typeof r === 'object' && r.original && r.replacement)).map(r => ({
+            id: r.id || `term-${Math.random().toString(36).substring(2, 7)}`,
+            original: String(r.original),
+            replacement: String(r.replacement),
+            category: r.category || 'Other',
+            enabled: r.enabled !== false,
+            scope: r.scope === 'novel' ? 'novel' : 'global',
+            bookTitle: r.bookTitle,
+            isCaseAware: r.isCaseAware !== false,
+            wholeWord: r.wholeWord !== false,
+            matchCount: typeof r.matchCount === 'number' ? r.matchCount : 0,
+            createdAt: typeof r.createdAt === 'number' ? r.createdAt : Date.now()
+          }));
+        }
+      }
+    } catch (e) {
+      console.error('Error loading terminology rules:', e);
+    }
+    return getDefaultTerminologyRules("Deep Sea Embers");
+  });
+
+  const [ignoreTerms, setIgnoreTerms] = useState<IgnoreTerm[]>(() => {
+    try {
+      const saved = localStorage.getItem('novel_ignore_terms');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((i): i is IgnoreTerm => Boolean(i && typeof i === 'object' && i.term)).map(i => ({
+            id: i.id || `ignore-${Math.random().toString(36).substring(2, 7)}`,
+            term: String(i.term),
+            enabled: i.enabled !== false,
+            scope: i.scope === 'novel' ? 'novel' : 'global',
+            bookTitle: i.bookTitle,
+            createdAt: typeof i.createdAt === 'number' ? i.createdAt : Date.now()
+          }));
+        }
+      }
+    } catch (e) {
+      console.error('Error loading ignore terms:', e);
+    }
+    return getDefaultIgnoreTerms();
+  });
+
+  const [isTerminologyModalOpen, setIsTerminologyModalOpen] = useState(false);
+
+  // Reset Terminology Rules & Recover from corrupted storage
+  const handleResetTerminologyToDefaults = useCallback(() => {
+    const defaultRules = getDefaultTerminologyRules(bookTitle || "Deep Sea Embers");
+    const defaultIgnores = getDefaultIgnoreTerms();
+    setTerminologyRules(defaultRules);
+    setIgnoreTerms(defaultIgnores);
+    setIsTerminologyEnabled(true);
+    try {
+      localStorage.removeItem('novel_terminology_rules');
+      localStorage.removeItem('novel_ignore_terms');
+      localStorage.setItem('novel_terminology_enabled', 'true');
+    } catch (e) {
+      console.error('Error resetting terminology in localStorage:', e);
+    }
+    showCustomNotification("Reset terminology dictionary to default rules", "info");
+  }, [bookTitle]);
+
+  // Persist Terminology Settings
+  useEffect(() => {
+    localStorage.setItem('novel_terminology_enabled', isTerminologyEnabled.toString());
+  }, [isTerminologyEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_terminology_rules', JSON.stringify(terminologyRules));
+  }, [terminologyRules]);
+
+  useEffect(() => {
+    localStorage.setItem('novel_ignore_terms', JSON.stringify(ignoreTerms));
+  }, [ignoreTerms]);
+
+  // Helper to dynamically apply terminology replacements to chapter title or text without modifying source data
+  const renderTransformedText = useCallback((text: string) => {
+    if (!text) return '';
+    return applyTerminology(text, terminologyRules, ignoreTerms, bookTitle, isTerminologyEnabled);
+  }, [terminologyRules, ignoreTerms, bookTitle, isTerminologyEnabled]);
 
   // Sequential click/tap tracker for Exit Fullscreen button in distraction-free mode
   const [dfClickCount, setDfClickCount] = useState(0);
@@ -882,38 +980,52 @@ export default function App() {
 
     let bestIndex = -1;
     let maxVisibleHeight = -1;
-    let closestDistance = Infinity;
+    let closestDistance = Number.POSITIVE_INFINITY;
 
-    articles.forEach((art) => {
+    const articleList = Array.from(articles);
+
+    // Priority 1: Chapter spans across the focal line
+    for (const art of articleList) {
       const indexAttr = art.getAttribute('data-chapter-index');
-      if (indexAttr === null) return;
+      if (indexAttr === null) continue;
       const index = parseInt(indexAttr, 10);
-      if (isNaN(index)) return;
+      if (isNaN(index)) continue;
 
       const rect = art.getBoundingClientRect();
-
-      // Priority 1: Chapter spans across the focal line
       if (rect.top <= focalY && rect.bottom > focalY) {
         bestIndex = index;
-        return;
+        break; // Stop immediately once active chapter spanning focal reading line is found
       }
+    }
 
-      // Priority 2: Maximum visible height inside viewport
-      const visibleTop = Math.max(0, rect.top);
-      const visibleBottom = Math.min(viewportHeight, rect.bottom);
-      const visibleHeight = visibleBottom - visibleTop;
+    // Priority 2: If no chapter covers focal line, find chapter with maximum visible height in viewport
+    if (bestIndex === -1) {
+      let maxVisibleHeight = -1;
+      let closestDistance = Number.POSITIVE_INFINITY;
 
-      if (visibleHeight > maxVisibleHeight && visibleHeight > 0) {
-        maxVisibleHeight = visibleHeight;
-        bestIndex = index;
-      } else if (maxVisibleHeight <= 0) {
-        const distance = Math.abs(rect.top - focalY);
-        if (distance < closestDistance) {
-          closestDistance = distance;
+      for (const art of articleList) {
+        const indexAttr = art.getAttribute('data-chapter-index');
+        if (indexAttr === null) continue;
+        const index = parseInt(indexAttr, 10);
+        if (isNaN(index)) continue;
+
+        const rect = art.getBoundingClientRect();
+        const visibleTop = Math.max(0, rect.top);
+        const visibleBottom = Math.min(viewportHeight, rect.bottom);
+        const visibleHeight = visibleBottom - visibleTop;
+
+        if (visibleHeight > maxVisibleHeight && visibleHeight > 0) {
+          maxVisibleHeight = visibleHeight;
           bestIndex = index;
+        } else if (maxVisibleHeight <= 0) {
+          const distance = Math.abs(rect.top - focalY);
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            bestIndex = index;
+          }
         }
       }
-    });
+    }
 
     if (bestIndex !== -1 && bestIndex !== currentChapterIndexRef.current) {
       isScrollingFromObserver.current = true;
@@ -2771,6 +2883,18 @@ export default function App() {
                 <Search className="w-4.5 h-4.5" />
               </button>
 
+              {/* Terminology Manager Trigger Button */}
+              <button 
+                id="terminology-header-btn"
+                onClick={() => setIsTerminologyModalOpen(true)}
+                className="p-2 sm:p-2.5 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 transition-all duration-150 cursor-pointer flex items-center gap-1.5 font-bold"
+                style={{ color: '#FF79B0' }}
+                title="Open Terminology Manager (Auto-Translation Dictionary)"
+              >
+                <Sparkles className="w-4.5 h-4.5 text-[#FF79B0]" />
+                <span className="hidden lg:inline text-xs">Terms</span>
+              </button>
+
               {/* Reading Settings Page Settings "Aa" button */}
               <button 
                 id="reading-settings-btn"
@@ -3006,14 +3130,14 @@ export default function App() {
                         {frameEnabled && frameBorder === 'ornament' && (
                           <div 
                             className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
-                            style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
+                            style={{ borderColor: (frameStyles.cardStyle as Record<string, string>)?.borderColor || 'rgba(0,0,0,0.15)' }} 
                           />
                         )}
 
                         {/* Visual separator between chapters in Infinite Mode */}
                         {!isFirstRendered && (
                           <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
-                            <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? (frameStyles.cardStyle.color || currentTheme.text) : currentTheme.text }} />
+                            <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.color || currentTheme.text) : currentTheme.text }} />
                             <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
                               {bookTitle}
                             </h2>
@@ -3035,10 +3159,10 @@ export default function App() {
                             className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
                             style={{ 
                               fontSize: `${activeFontSize * 1.15}px`,
-                              borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
+                              borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                             }}
                           >
-                            {chap.title}
+                            {renderTransformedText(chap.title)}
                           </h3>
                         </div>
 
@@ -3067,7 +3191,7 @@ export default function App() {
                                   marginBottom: `${activeParagraphSpacing}rem`
                                 }}
                               >
-                                {para}
+                                {renderTransformedText(para)}
                               </p>
                             );
                           })}
@@ -3089,7 +3213,7 @@ export default function App() {
                   {frameEnabled && frameBorder === 'ornament' && (
                     <div 
                       className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
-                      style={{ borderColor: frameStyles.cardStyle.borderColor || 'rgba(0,0,0,0.15)' }} 
+                      style={{ borderColor: (frameStyles.cardStyle as Record<string, string>)?.borderColor || 'rgba(0,0,0,0.15)' }} 
                     />
                   )}
 
@@ -3104,10 +3228,10 @@ export default function App() {
                       className="font-serif font-bold tracking-tight border-b pb-2" 
                       style={{ 
                         fontSize: `${activeFontSize * 1.2}px`,
-                        borderColor: frameEnabled ? (frameStyles.cardStyle.borderColor || currentTheme.border) : currentTheme.border
+                        borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
-                      {activeChapter.title}
+                      {renderTransformedText(activeChapter.title)}
                     </h2>
                   </div>
 
@@ -3136,7 +3260,7 @@ export default function App() {
                             marginBottom: `${activeParagraphSpacing}rem`
                           }}
                         >
-                          {para}
+                          {renderTransformedText(para)}
                         </p>
                       );
                     })}
@@ -3640,10 +3764,39 @@ export default function App() {
                 </div>
               </div>
 
-              {/* SECTION 6: Mode Toggles (Grid on Tablets) */}
+              {/* SECTION 6: Mode Toggles & Terminology Engine */}
               <div className="space-y-3">
-                <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] block">Reading Modes & Layout</span>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-[#FF79B0] block">Reading Modes & Terminology</span>
+                
+                {/* Terminology Manager Banner */}
+                <div className="p-4 rounded-2xl bg-[#FF79B0]/10 border border-[#FF79B0]/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-[#FF79B0]/20 text-[#FF79B0] border border-[#FF79B0]/30 flex-shrink-0">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">Global & Per-Novel Terminology Manager</span>
+                      <span className="text-[10px] text-white/60 block mt-0.5">
+                        {isTerminologyEnabled 
+                          ? `${terminologyRules.filter(r => r.enabled).length} replacement rules active • Auto-translating while reading`
+                          : 'Replacements temporarily paused'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsReadingSettingsOpen(false);
+                      setIsTerminologyModalOpen(true);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-[#FF79B0] hover:bg-[#FF79B0]/90 text-slate-950 font-extrabold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5 flex-shrink-0 active:scale-95"
+                  >
+                    <span>Manage Dictionary</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
                   {/* Infinite Scroll */}
                   <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/[0.07] transition-all">
                     <div>
@@ -4023,6 +4176,26 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {/* GLOBAL & PER-NOVEL TERMINOLOGY MANAGER MODAL WITH ERROR BOUNDARY */}
+      <TerminologyErrorBoundary
+        isOpen={isTerminologyModalOpen}
+        onClose={() => setIsTerminologyModalOpen(false)}
+        onResetDefaults={handleResetTerminologyToDefaults}
+      >
+        <TerminologyManagerModal
+          isOpen={isTerminologyModalOpen}
+          onClose={() => setIsTerminologyModalOpen(false)}
+          rules={terminologyRules}
+          setRules={setTerminologyRules}
+          ignoreTerms={ignoreTerms}
+          setIgnoreTerms={setIgnoreTerms}
+          currentBookTitle={bookTitle}
+          isTerminologyEnabled={isTerminologyEnabled}
+          setIsTerminologyEnabled={setIsTerminologyEnabled}
+          showNotification={showCustomNotification}
+        />
+      </TerminologyErrorBoundary>
 
     </div>
   );
