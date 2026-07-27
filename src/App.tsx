@@ -52,133 +52,50 @@ interface Chapter {
 // Initial default chapters - now empty by default so chapters only appear when fetched or added manually
 const DEFAULT_CHAPTERS: Chapter[] = [];
 
-// Helper function to clean and filter a list of paragraphs to remove comment sections, form fields, and boilerplate
+// Helper function to clean and filter a list of paragraphs to remove script blocks and HTML boilerplate while preserving all story text
 const cleanChapterParagraphs = (paragraphs: string[]): string[] => {
-  if (!paragraphs) return [];
-  let cutOffIndex = -1;
+  if (!paragraphs || !Array.isArray(paragraphs)) return [];
   
-  for (let i = 0; i < paragraphs.length; i++) {
-    const p = paragraphs[i].trim();
-    const lower = p.toLowerCase();
-    
-    // WordPress comment section, author inputs, or script blocks
-    if (
-      lower === 'name' || 
-      lower === 'email' || 
-      lower === 'website' || 
-      lower === 'comment' || 
-      lower === 'leave a reply' || 
-      lower === 'leave a comment' || 
-      lower === 'cancel reply' ||
-      lower === 'post comment' ||
-      lower.includes('comment form') ||
-      lower.includes('post comment') ||
-      lower.includes('add a comment') ||
-      lower.includes('submit comment') ||
-      lower.includes('cdata') ||
-      lower.includes('ak_js') ||
-      lower.includes('document.getelementbyid') ||
-      p.startsWith('Δ')
-    ) {
-      cutOffIndex = i;
-      break;
-    }
-  }
-  
-  const sliced = cutOffIndex !== -1 ? paragraphs.slice(0, cutOffIndex) : paragraphs;
-  
-  return sliced.filter(p => {
-    const trimmed = p.trim();
-    const lower = trimmed.toLowerCase();
-    
-    if (!trimmed) return false;
-    
-    // Extra safety against embedded JavaScript / CDATA
-    if (
-      lower.includes('cdata') || 
-      lower.includes('document.getelementbyid') || 
-      lower.includes('window.ads') || 
-      lower.includes('var ') || 
-      lower.includes('function(') ||
-      lower.includes('ak_js') ||
-      lower.includes('<![cdata[') ||
-      lower.includes(']]>') ||
-      trimmed.startsWith('Δ')
-    ) {
-      return false;
-    }
-    
-    if (
-      lower === 'name' || 
-      lower === 'email' || 
-      lower === 'website' || 
-      lower === 'comment' || 
-      lower === 'leave a reply' || 
-      lower === 'leave a comment' || 
-      lower === 'cancel reply'
-    ) {
-      return false;
-    }
-    
-    // Exclude lone dates e.g. "3.07.2026"
-    if (/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(trimmed)) {
-      return false;
-    }
-
-    // Exclude Edge voice optimization notes
-    if (lower.includes('edge read aloud optimization')) {
-      return false;
-    }
-    
-    return true;
-  });
+  return paragraphs
+    .map(p => (typeof p === 'string' ? p.trim() : ''))
+    .filter(p => {
+      if (!p) return false;
+      const lower = p.toLowerCase();
+      
+      // Only filter out pure HTML/JS script declarations or comment form markup, NEVER prose sentences
+      if (
+        lower.startsWith('<script') || 
+        lower.startsWith('<style') ||
+        lower.includes('<![cdata[') ||
+        lower === ']]>' ||
+        lower.includes('document.getelementbyid(') ||
+        lower.includes('window.adsbygoogle')
+      ) {
+        return false;
+      }
+      
+      return true;
+    });
 };
 
-// Function to auto-detect and clean a chapter's generic title if its first paragraph contains the full title
+// Function to clean a chapter without dropping valid prose or sentences
 const cleanGenericChapter = (chap: Chapter): Chapter => {
   if (!chap) return chap;
   
-  // Clean all paragraphs in the content first to remove comment fields/junk
   const cleanedContent = cleanChapterParagraphs(chap.content || []);
   if (cleanedContent.length === 0) {
     return { ...chap, content: [] };
   }
   
-  const firstPara = cleanedContent[0].trim();
   const titleText = (chap.title || "").trim();
-  const titleLower = titleText.toLowerCase();
-  const firstParaLower = firstPara.toLowerCase();
+  if (!titleText) return { ...chap, content: cleanedContent };
+
+  const firstPara = cleanedContent[0].trim();
   
-  // Check if first paragraph is exactly equal to the title, or if one is a heading-like prefix of the other
-  const titleFirstParaMatch = (titleLower === firstParaLower) || 
-    (firstParaLower.length < 150 && (
-      firstParaLower.startsWith(titleLower) || 
-      titleLower.startsWith(firstParaLower)
-    ));
-  
-  if (titleFirstParaMatch) {
-    // Keep the longer/more descriptive of the two as the title, and remove it from the body
-    const updatedTitle = firstPara.length >= titleText.length ? firstPara : titleText;
+  // Only remove first paragraph if it is EXACTLY identical to the chapter title AND contains no extra sentence content
+  if (firstPara.toLowerCase() === titleText.toLowerCase() && firstPara.length < 100) {
     return {
       ...chap,
-      title: updatedTitle,
-      content: cleanedContent.slice(1)
-    };
-  }
-  
-  const isGenericTitle = /^(chapter|chap\.?|ch\.?|chapiter)\s*\d+$/i.test(titleLower);
-  const startsWithTitle = firstParaLower.startsWith(titleLower);
-  const isHeadingLike = firstPara.length < 150 && (
-    startsWithTitle ||
-    firstParaLower.startsWith('chapter ') ||
-    firstParaLower.startsWith('chap. ') ||
-    firstParaLower.startsWith('ch. ')
-  );
-  
-  if (isGenericTitle && isHeadingLike) {
-    return {
-      ...chap,
-      title: firstPara,
       content: cleanedContent.slice(1)
     };
   }
@@ -560,6 +477,24 @@ export default function App() {
     isDanger: false
   });
 
+  const [pasteAuditDialog, setPasteAuditDialog] = useState<{
+    isOpen: boolean;
+    chaptersToImport: Chapter[];
+    warnings: string[];
+    totalWords: number;
+    totalParagraphs: number;
+    totalCharacters: number;
+    hasIncompleteLastSentence: boolean;
+  }>({
+    isOpen: false,
+    chaptersToImport: [],
+    warnings: [],
+    totalWords: 0,
+    totalParagraphs: 0,
+    totalCharacters: 0,
+    hasIncompleteLastSentence: false,
+  });
+
   const [notification, setNotification] = useState<{
     isOpen: boolean;
     message: string;
@@ -739,7 +674,11 @@ export default function App() {
 
   // --- LOCAL PERSISTENCE AUTOSAVE ---
   useEffect(() => {
-    localStorage.setItem('novel_chapters', JSON.stringify(chapters));
+    try {
+      localStorage.setItem('novel_chapters', JSON.stringify(chapters));
+    } catch (e) {
+      console.warn("Storage limit reached when saving chapters:", e);
+    }
   }, [chapters]);
 
   useEffect(() => {
@@ -1556,43 +1495,74 @@ export default function App() {
     showCustomNotification("Bulk modifications applied successfully!", "success");
   };
 
-  // --- BULK PASTE HANDLER ---
-  const handlePasteMultiple = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pasteMultipleText.trim()) return;
+  // --- BULK PASTE & PARSER HANDLER WITH INTEGRITY AUDIT ---
+  const analyzeAndParsePastedText = (
+    text: string,
+    splitMode: 'chapter' | 'custom',
+    customDelimiter: string,
+    existingChapters: Chapter[]
+  ) => {
+    const rawText = text;
+    const totalCharacters = rawText.length;
+    const warnings: string[] = [];
+    const parsedChapters: Chapter[] = [];
 
-    let parsedChapters: Chapter[] = [];
-    
-    if (pasteSplitMode === 'chapter') {
-      // Intelligently splits by words like "Chapter 1", "Chapter 100", "Chapter 173: ..."
-      // We look for patterns like "Chapter \d+" or "CHAPTER \d+" or "chapter \d+"
-      const lines = pasteMultipleText.split('\n');
+    if (!rawText.trim()) {
+      return { chapters: [], warnings: ["Pasted text is empty."], totalWords: 0, totalParagraphs: 0, totalCharacters: 0, hasIncompleteLastSentence: false };
+    }
+
+    // Check if the overall pasted text buffer ends mid-sentence without closing punctuation
+    const trimmedRaw = rawText.trim();
+    const lastChar = trimmedRaw.slice(-1);
+    const closingPunctuationRegex = /[.!?…”"'\)\]\}’]$/;
+    const hasIncompleteLastSentence = !closingPunctuationRegex.test(lastChar);
+
+    if (hasIncompleteLastSentence) {
+      warnings.push(
+        `⚠️ Warning: The pasted text ends mid-sentence without closing punctuation (ends with "...${trimmedRaw.slice(-30)}"). Please check if your clipboard or copy source was cut off.`
+      );
+    }
+
+    const existingMaxNumber = existingChapters.length > 0 ? Math.max(...existingChapters.map(c => c.number)) : 0;
+    let chapCounter = existingMaxNumber > 0 ? existingMaxNumber + 1 : 1;
+
+    if (splitMode === 'chapter') {
+      // Extensive chapter header detection regex:
+      // Matches "Chapter 1", "CHAPTER 1", "Ch 1", "Ch. 1", "Chap 1", "Volume 1 Chapter 2", "Chapter 1: Title", "Chapter 1 - Title", "[Chapter 1]", "### Chapter 1", "Chapter IV", "第1章"
+      const lines = rawText.split(/\r?\n/);
       let currentChap: Chapter | null = null;
-      let chapCounter = chapters.length > 0 ? Math.max(...chapters.map(c => c.number)) + 1 : 1;
+      const CHAPTER_HEADER_REGEX = /^(?:#+\s*|\[|\(|==\s*)?(?:volume\s+\d+[\s,:-]+)?(?:chapter|chap\.?|ch\.?|chapiter|第)\s*(\d+|[ivxlcdm]+|[一二三四五六七八九十]+)\s*(?:章|[:.\-–—\s]+(.*))?$/i;
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
 
-        // Check if line indicates a new chapter
-        const chapterMatch = line.match(/^(?:chapter|Chapter|CHAPTER)\s+(\d+)[:\s]*(.*)/);
-        if (chapterMatch) {
+        const match = line.match(CHAPTER_HEADER_REGEX);
+        if (match) {
           if (currentChap) {
             parsedChapters.push(currentChap);
           }
-          const num = parseInt(chapterMatch[1], 10);
-          const rawTitle = chapterMatch[2]?.trim() || `Chapter ${num}`;
+          let num = parseInt(match[1], 10);
+          if (isNaN(num)) {
+            num = chapCounter++;
+          } else {
+            chapCounter = Math.max(chapCounter, num + 1);
+          }
+
+          const rawSubTitle = match[2]?.trim() || `Chapter ${num}`;
+          const finalTitle = line.length < 120 ? line : `Chapter ${num}: ${rawSubTitle}`;
+
           currentChap = {
             id: `paste-${Date.now()}-${num}-${Math.random().toString(36).substr(2, 5)}`,
             number: num,
-            title: line.includes(':') ? line : `Chapter ${num}: ${rawTitle}`,
+            title: finalTitle,
             content: []
           };
         } else {
           if (currentChap) {
             currentChap.content.push(line);
           } else {
-            // Text before first chapter header: create an initial chapter
+            // Text before first chapter header
             currentChap = {
               id: `paste-${Date.now()}-initial-${Math.random().toString(36).substr(2, 5)}`,
               number: chapCounter++,
@@ -1606,15 +1576,15 @@ export default function App() {
         parsedChapters.push(currentChap);
       }
     } else {
-      // Split by custom delimiter
-      const parts = pasteMultipleText.split(pasteCustomDelimiter);
-      let chapCounter = chapters.length > 0 ? Math.max(...chapters.map(c => c.number)) + 1 : 1;
+      // Custom Delimiter Split
+      const delimiter = customDelimiter || '---';
+      const parts = rawText.split(delimiter);
 
       parts.forEach((part, index) => {
         const trimmedPart = part.trim();
         if (!trimmedPart) return;
 
-        const lines = trimmedPart.split('\n').map(l => l.trim()).filter(Boolean);
+        const lines = trimmedPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         if (lines.length === 0) return;
 
         const title = lines[0].length < 100 ? lines[0] : `Chapter ${chapCounter}`;
@@ -1623,22 +1593,58 @@ export default function App() {
         parsedChapters.push({
           id: `paste-custom-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
           number: chapCounter++,
-          title: title.startsWith('Chapter') ? title : `Chapter ${chapCounter - 1}: ${title}`,
+          title: title.startsWith('Chapter') || title.startsWith('Ch') ? title : `Chapter ${chapCounter - 1}: ${title}`,
           content
         });
       });
     }
 
-    if (parsedChapters.length === 0) {
-      showCustomNotification("No chapters could be parsed. Check your split settings or template.", "error");
-      return;
+    // Health and integrity checks across parsed chapters
+    let totalWords = 0;
+    let totalParagraphs = 0;
+
+    parsedChapters.forEach(c => {
+      totalParagraphs += c.content.length;
+      let cWordCount = 0;
+      c.content.forEach(p => {
+        cWordCount += p.split(/\s+/).filter(Boolean).length;
+      });
+      totalWords += cWordCount;
+
+      if (c.content.length === 0) {
+        warnings.push(`⚠️ Chapter "${c.title}" has no body paragraphs.`);
+      } else {
+        const lastParagraph = c.content[c.content.length - 1].trim();
+        const lastChapChar = lastParagraph.slice(-1);
+        if (!closingPunctuationRegex.test(lastChapChar)) {
+          warnings.push(`⚠️ Chapter "${c.title}" ends without closing punctuation (ends with: "...${lastParagraph.slice(-35)}").`);
+        }
+      }
+
+      if (cWordCount > 15000 && splitMode === 'chapter') {
+        warnings.push(`⚠️ Chapter "${c.title}" is exceptionally long (${cWordCount.toLocaleString()} words). Verify that no unparsed sub-chapter headers exist.`);
+      }
+    });
+
+    if (parsedChapters.length === 1 && totalWords > 10000 && splitMode === 'chapter') {
+      warnings.push(`⚠️ Only 1 single chapter was detected for ${totalWords.toLocaleString()} words. If your novel contains multiple chapters with custom separators, try switching Split Logic to "Custom Separator".`);
     }
 
+    return {
+      chapters: parsedChapters,
+      warnings,
+      totalWords,
+      totalParagraphs,
+      totalCharacters,
+      hasIncompleteLastSentence
+    };
+  };
+
+  const executeImportChapters = (parsedChapters: Chapter[]) => {
     const cleanedParsedChapters = parsedChapters.map(cleanGenericChapter);
     const updated = [...chapters, ...cleanedParsedChapters].sort((a, b) => a.number - b.number);
     setChapters(updated);
-    
-    // Navigate to first added chapter
+
     const firstAddedId = cleanedParsedChapters[0]?.id || '';
     const newIdx = updated.findIndex(c => c.id === firstAddedId);
     if (newIdx !== -1) {
@@ -1646,8 +1652,38 @@ export default function App() {
     }
 
     setPasteMultipleText('');
+    setPasteAuditDialog(prev => ({ ...prev, isOpen: false }));
     setActiveTab('reader');
-    showCustomNotification(`Successfully imported ${parsedChapters.length} chapters!`, "success");
+    showCustomNotification(
+      `Successfully imported ${parsedChapters.length} chapters (${parsedChapters.reduce((acc, c) => acc + c.content.join(' ').split(/\s+/).filter(Boolean).length, 0).toLocaleString()} words)!`,
+      "success"
+    );
+  };
+
+  const handlePasteMultiple = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pasteMultipleText.trim()) return;
+
+    const analysis = analyzeAndParsePastedText(pasteMultipleText, pasteSplitMode, pasteCustomDelimiter, chapters);
+
+    if (analysis.chapters.length === 0) {
+      showCustomNotification("No chapters could be parsed. Check your split settings or delimiter.", "error");
+      return;
+    }
+
+    if (analysis.warnings.length > 0) {
+      setPasteAuditDialog({
+        isOpen: true,
+        chaptersToImport: analysis.chapters,
+        warnings: analysis.warnings,
+        totalWords: analysis.totalWords,
+        totalParagraphs: analysis.totalParagraphs,
+        totalCharacters: analysis.totalCharacters,
+        hasIncompleteLastSentence: analysis.hasIncompleteLastSentence,
+      });
+    } else {
+      executeImportChapters(analysis.chapters);
+    }
   };
 
   // --- AUTOMATED RANGE SCRAPER ENGINE ---
@@ -2590,7 +2626,7 @@ export default function App() {
               <div className="space-y-1">
                 <h3 className="font-semibold text-sm">Paste Multiple Chapters</h3>
                 <p className="text-xs" style={{ color: currentTheme.secondaryText }}>
-                  Paste a large file of chapters. We will split them automatically!
+                  Paste large novels or multiple chapters. Automatically split without losing any text or sentences!
                 </p>
               </div>
 
@@ -2638,26 +2674,70 @@ export default function App() {
               )}
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold uppercase block" style={{ color: currentTheme.secondaryText }}>Raw Chapter Dump</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase block" style={{ color: currentTheme.secondaryText }}>Raw Chapter Dump</label>
+                  {pasteMultipleText.trim().length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPasteMultipleText('')}
+                      className="text-[10px] uppercase font-bold text-rose-400 hover:underline"
+                    >
+                      Clear Text
+                    </button>
+                  )}
+                </div>
                 <textarea 
                   id="paste-multiple-textarea"
                   required
-                  rows={12}
+                  rows={14}
                   placeholder={`Chapter 174: First Chapter...\n\nText here...\n\nChapter 175: Second Chapter...\n\nText here...`}
                   value={pasteMultipleText}
                   onChange={(e) => setPasteMultipleText(e.target.value)}
-                  className="w-full p-2 rounded-lg bg-black/10 dark:bg-white/10 border text-sm font-sans focus:outline-none"
+                  className="w-full p-2.5 rounded-lg bg-black/10 dark:bg-white/10 border text-sm font-sans focus:outline-none transition-all"
                   style={{ borderColor: currentTheme.border }}
                 />
+
+                {/* Live Text Diagnostics & Integrity Bar */}
+                {pasteMultipleText.trim().length > 0 && (() => {
+                  const charCount = pasteMultipleText.length;
+                  const wordCount = pasteMultipleText.split(/\s+/).filter(Boolean).length;
+                  const estimatedChaps = (pasteMultipleText.match(/^(?:#+\s*|\[|\(|==\s*)?(?:volume\s+\d+[\s,:-]+)?(?:chapter|chap\.?|ch\.?|chapiter|第)\s*(\d+|[ivxlcdm]+|[一二三四五六七八九十]+)/gim) || []).length;
+                  const trimmed = pasteMultipleText.trim();
+                  const lastChar = trimmed.slice(-1);
+                  const isCutOff = !/[.!?…”"'\)\]\}’]$/.test(lastChar);
+
+                  return (
+                    <div className="space-y-2 mt-2">
+                      <div className="flex flex-wrap items-center justify-between text-[11px] px-2 py-1.5 rounded-lg bg-black/10 dark:bg-white/5 border border-white/10" style={{ color: currentTheme.secondaryText }}>
+                        <span><strong>{charCount.toLocaleString()}</strong> chars • <strong>{wordCount.toLocaleString()}</strong> words</span>
+                        <span className="font-semibold text-emerald-500 dark:text-emerald-400">
+                          ⚡ ~{estimatedChaps > 0 ? estimatedChaps : 1} chapter(s) detected
+                        </span>
+                      </div>
+
+                      {isCutOff && (
+                        <div className="p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-300 text-xs flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-bold block">Pasted text may be cut off mid-sentence!</span>
+                            <span className="text-[11px] opacity-90 block mt-0.5">
+                              Text ends with: <code className="bg-black/20 px-1 py-0.5 rounded text-[10px]">"...{trimmed.slice(-30)}"</code> (missing closing period or quote).
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <button 
                 id="btn-paste-chapters-submit"
                 type="submit"
-                className="w-full py-2.5 rounded-lg font-bold text-white transition-all hover:brightness-110"
+                className="w-full py-2.5 rounded-lg font-bold text-white transition-all hover:brightness-110 shadow-md flex items-center justify-center gap-2 cursor-pointer"
                 style={{ backgroundColor: currentTheme.accent }}
               >
-                Split & Import
+                Split & Import Chapters
               </button>
             </form>
           )}
@@ -4196,6 +4276,66 @@ export default function App() {
           showNotification={showCustomNotification}
         />
       </TerminologyErrorBoundary>
+
+      {/* 8. PASTE INTEGRITY & WARNING AUDIT DIALOG */}
+      {pasteAuditDialog.isOpen && (
+        <div id="paste-audit-modal-overlay" className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div 
+            id="paste-audit-modal-body"
+            className="w-full max-w-md rounded-2xl border p-6 flex flex-col shadow-2xl animate-in zoom-in-95 duration-150 max-h-[85vh] overflow-y-auto"
+            style={{ 
+              backgroundColor: currentTheme.cardBg, 
+              color: currentTheme.text,
+              borderColor: currentTheme.border
+            }}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2.5 rounded-full bg-amber-500/15 text-amber-500 flex-shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold font-serif">Pasted Text Integrity Warning</h3>
+                <p className="text-xs opacity-75 mt-1 leading-relaxed">
+                  We parsed <strong>{pasteAuditDialog.chaptersToImport.length}</strong> chapter(s) ({pasteAuditDialog.totalWords.toLocaleString()} words, {pasteAuditDialog.totalParagraphs.toLocaleString()} paragraphs), but detected potential formatting anomalies or text cutoffs:
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 mb-5">
+              <span className="text-xs font-bold uppercase tracking-wider block opacity-75">Warnings & Quality Audit:</span>
+              <div className="p-3 rounded-xl bg-black/10 dark:bg-white/5 border border-white/10 space-y-2 text-xs max-h-48 overflow-y-auto">
+                {pasteAuditDialog.warnings.map((warn, i) => (
+                  <div key={i} className="text-amber-600 dark:text-amber-300 leading-relaxed flex items-start gap-1.5">
+                    <span className="flex-shrink-0">•</span>
+                    <span>{warn}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-black/10 dark:border-white/10">
+              <button 
+                id="btn-paste-audit-cancel"
+                type="button"
+                onClick={() => setPasteAuditDialog(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 rounded-xl text-xs font-semibold border hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                style={{ borderColor: currentTheme.border }}
+              >
+                Cancel & Edit Paste
+              </button>
+              <button 
+                id="btn-paste-audit-proceed"
+                type="button"
+                onClick={() => executeImportChapters(pasteAuditDialog.chaptersToImport)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white hover:brightness-110 transition-all shadow cursor-pointer"
+                style={{ backgroundColor: currentTheme.accent }}
+              >
+                Proceed & Import All Chapters
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
