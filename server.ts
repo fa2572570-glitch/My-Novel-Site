@@ -114,13 +114,30 @@ async function startServer() {
         'h2',
         'title'
       ];
+      
+      const IGNORED_BRANDS = ['novellunar', 'novelbin', 'webnovel', 'readnovelfull', 'freewebnovel', '404'];
 
       for (const selector of titleSelectors) {
-        const text = $(selector).first().text().trim();
-        if (text) {
-          title = text;
-          break;
-        }
+        const elements = $(selector);
+        let foundValid = false;
+        elements.each((_, el) => {
+          const text = $(el).text().trim();
+          if (text) {
+            const lowerText = text.toLowerCase();
+            // Check if this text is EXACTLY one of the ignored brands
+            if (!IGNORED_BRANDS.includes(lowerText)) {
+              title = text;
+              foundValid = true;
+              return false; // Break the each loop
+            }
+          }
+        });
+        if (foundValid) break; // Break the selector loop
+      }
+
+      // Fallback if everything was an ignored brand (cleanGenericChapter will fix it later)
+      if (!title) {
+        title = $('h1').first().text().trim() || 'Imported Chapter';
       }
 
       // If title is from <title> tag, clean up common site names

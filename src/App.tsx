@@ -33,7 +33,8 @@ import {
   Headphones,
   Infinity,
   Sliders,
-  ArrowRight
+  ArrowRight,
+  Wand2
 } from 'lucide-react';
 import { TerminologyRule, IgnoreTerm } from './types/terminology';
 import { applyTerminology, getDefaultTerminologyRules, getDefaultIgnoreTerms } from './utils/terminology';
@@ -91,18 +92,30 @@ const cleanGenericChapter = (chap: Chapter): Chapter => {
   if (!titleText) return { ...chap, content: cleanedContent };
 
   const firstPara = cleanedContent[0].trim();
+  let newTitle = titleText;
+  let newContent = [...cleanedContent];
   
-  // Only remove first paragraph if it is EXACTLY identical to the chapter title AND contains no extra sentence content
-  if (firstPara.toLowerCase() === titleText.toLowerCase() && firstPara.length < 100) {
-    return {
-      ...chap,
-      content: cleanedContent.slice(1)
-    };
+  // Is the current title a known generic site banner?
+  const isBrandTitle = /^(novellunar|novelbin|webnovel|readnovelfull|freewebnovel|novel|chapter)$/i.test(titleText) || titleText.includes('404');
+  const isGenericTitle = /^(chapter|chap\.?|ch\.?|chapiter)\s*\d+$/i.test(titleText);
+  
+  // Matches "Chapter 1", "Volume 1 Chapter 2", "Chapter 1: Title", "Chapter 1 - Title", "第1章"
+  const chapterHeaderRegex = /^(?:#+\s*|\[|\(|==\s*)?(?:volume\s+\d+[\s,:-]+)?(?:chapter|chap\.?|ch\.?|chapiter|第)\s*(\d+|[ivxlcdm]+|[一二三四五六七八九十]+)(?:章|[:.\-–—\s]+(.*))?/i;
+
+  // If the title is bad (brand name or generic), and the first paragraph actually contains a real chapter header, promote it!
+  if ((isBrandTitle || isGenericTitle) && chapterHeaderRegex.test(firstPara) && firstPara.length < 150) {
+    newTitle = firstPara;
+    newContent = newContent.slice(1);
+  } 
+  // Otherwise, if the first paragraph is EXACTLY identical to the chapter title AND contains no extra sentence content, just remove the redundant para
+  else if (firstPara.toLowerCase() === titleText.toLowerCase() && firstPara.length < 100) {
+    newContent = newContent.slice(1);
   }
   
   return {
     ...chap,
-    content: cleanedContent
+    title: newTitle,
+    content: newContent
   };
 };
 
@@ -1887,6 +1900,28 @@ export default function App() {
     );
   };
 
+  const handleFixTitles = () => {
+    const updatedChapters = chapters.map(chap => {
+      // Re-run the cleanGenericChapter logic on all existing chapters
+      const cleaned = cleanGenericChapter({ ...chap, title: chap.title.trim() });
+      return cleaned;
+    });
+
+    let fixedCount = 0;
+    for (let i = 0; i < chapters.length; i++) {
+      if (chapters[i].title !== updatedChapters[i].title || chapters[i].content.length !== updatedChapters[i].content.length) {
+        fixedCount++;
+      }
+    }
+
+    if (fixedCount > 0) {
+      setChapters(updatedChapters);
+      showCustomNotification(`Successfully fixed titles and formatting for ${fixedCount} chapters!`, "success");
+    } else {
+      showCustomNotification("No chapters needed fixing.", "info");
+    }
+  };
+
   const handleSaveAsDefault = () => {
     localStorage.setItem('novel_default_profile_theme', theme);
     localStorage.setItem('novel_default_profile_custom_bg', customBgColor);
@@ -2378,6 +2413,17 @@ export default function App() {
                         >
                           <CheckSquare className="w-3.5 h-3.5" />
                           {isSelectMode ? "Cancel Select" : "Select Mode"}
+                        </button>
+                      )}
+                      {chapters.length > 0 && (
+                        <button 
+                          id="fix-titles-btn"
+                          onClick={handleFixTitles}
+                          className="text-xs hover:underline flex items-center gap-1 text-white/50 hover:text-white transition-colors cursor-pointer"
+                          title="Auto-fix generic chapter titles (e.g. Novellunar or Chapter 1) using the first paragraph"
+                        >
+                          <Wand2 className="w-3.5 h-3.5" />
+                          Fix
                         </button>
                       )}
                       {chapters.length > 0 && (
