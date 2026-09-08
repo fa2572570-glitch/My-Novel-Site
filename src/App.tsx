@@ -3306,18 +3306,7 @@ export default function App() {
                               borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                             }}
                           >
-                            {renderTransformedText((() => {
-                              let t = chap.title;
-                              if (t.match(/^chapter\s+\d+[:\s-]/i)) {
-                                const parts = t.split(/[:\-]/);
-                                if (parts.length > 1) {
-                                  t = parts.slice(1).join(':').trim();
-                                }
-                              } else if (t.match(/^chapter\s+\d+/i)) {
-                                t = t.replace(/^chapter\s+\d+\s*/i, '').trim();
-                              }
-                              return t || chap.title;
-                            })())}
+                            {renderTransformedText(chap.title)}
                           </h3>
                         </div>
 
@@ -3386,18 +3375,7 @@ export default function App() {
                         borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
-                      {renderTransformedText((() => {
-                        let t = activeChapter.title;
-                        if (t.match(/^chapter\s+\d+[:\s-]/i)) {
-                          const parts = t.split(/[:\-]/);
-                          if (parts.length > 1) {
-                            t = parts.slice(1).join(':').trim();
-                          }
-                        } else if (t.match(/^chapter\s+\d+/i)) {
-                          t = t.replace(/^chapter\s+\d+\s*/i, '').trim();
-                        }
-                        return t || activeChapter.title;
-                      })())}
+                      {renderTransformedText(activeChapter.title)}
                     </h2>
                   </div>
 
