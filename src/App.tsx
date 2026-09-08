@@ -102,14 +102,26 @@ const cleanGenericChapter = (chap: Chapter): Chapter => {
   // Matches "Chapter 1", "Volume 1 Chapter 2", "Chapter 1: Title", "Chapter 1 - Title", "第1章"
   const chapterHeaderRegex = /^(?:#+\s*|\[|\(|==\s*)?(?:volume\s+\d+[\s,:-]+)?(?:chapter|chap\.?|ch\.?|chapiter|第)\s*(\d+|[ivxlcdm]+|[一二三四五六七八九十]+)(?:章|[:.\-–—\s]+(.*))?/i;
 
-  // If the title is bad (brand name or generic), and the first paragraph actually contains a real chapter header, promote it!
+  const normTitle = titleText.replace(/[\s\W_]+/g, '').toLowerCase();
+  const normPara = firstPara.replace(/[\s\W_]+/g, '').toLowerCase();
+
+  // 1. If the title is bad (brand name or generic), and the first paragraph actually contains a real chapter header, promote it!
   if ((isBrandTitle || isGenericTitle) && chapterHeaderRegex.test(firstPara) && firstPara.length < 150) {
     newTitle = firstPara;
     newContent = newContent.slice(1);
   } 
-  // Otherwise, if the first paragraph is EXACTLY identical to the chapter title AND contains no extra sentence content, just remove the redundant para
-  else if (firstPara.toLowerCase() === titleText.toLowerCase() && firstPara.length < 100) {
-    newContent = newContent.slice(1);
+  // 2. Otherwise, check if the first paragraph is effectively a duplicate of the title
+  else if (firstPara.length < 150) {
+    if (normPara === normTitle) {
+      // Exact match after removing spacing/punctuation (e.g. "Chapter 2 : Title" vs "Chapter 2: Title")
+      newContent = newContent.slice(1);
+    } else if (normPara.includes(normTitle) || normTitle.includes(normPara)) {
+      // One is a substring of the other. Only strip if one of them is explicitly a chapter header
+      // e.g. Title: "Born a Sword Maniac", Para: "Chapter 1: Born a Sword Maniac"
+      if (chapterHeaderRegex.test(firstPara) || chapterHeaderRegex.test(titleText)) {
+        newContent = newContent.slice(1);
+      }
+    }
   }
   
   return {
@@ -2518,6 +2530,12 @@ export default function App() {
                           if (parts.length > 1) {
                             displayTitle = parts.slice(1).join(':').trim();
                           }
+                        } else if (displayTitle.match(/^chapter\s+\d+/i)) {
+                          displayTitle = displayTitle.replace(/^chapter\s+\d+\s*/i, '').trim();
+                        }
+                        
+                        if (!displayTitle) {
+                          displayTitle = chap.title;
                         }
 
                         return (
@@ -3288,7 +3306,18 @@ export default function App() {
                               borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                             }}
                           >
-                            {renderTransformedText(chap.title)}
+                            {renderTransformedText((() => {
+                              let t = chap.title;
+                              if (t.match(/^chapter\s+\d+[:\s-]/i)) {
+                                const parts = t.split(/[:\-]/);
+                                if (parts.length > 1) {
+                                  t = parts.slice(1).join(':').trim();
+                                }
+                              } else if (t.match(/^chapter\s+\d+/i)) {
+                                t = t.replace(/^chapter\s+\d+\s*/i, '').trim();
+                              }
+                              return t || chap.title;
+                            })())}
                           </h3>
                         </div>
 
@@ -3357,7 +3386,18 @@ export default function App() {
                         borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
-                      {renderTransformedText(activeChapter.title)}
+                      {renderTransformedText((() => {
+                        let t = activeChapter.title;
+                        if (t.match(/^chapter\s+\d+[:\s-]/i)) {
+                          const parts = t.split(/[:\-]/);
+                          if (parts.length > 1) {
+                            t = parts.slice(1).join(':').trim();
+                          }
+                        } else if (t.match(/^chapter\s+\d+/i)) {
+                          t = t.replace(/^chapter\s+\d+\s*/i, '').trim();
+                        }
+                        return t || activeChapter.title;
+                      })())}
                     </h2>
                   </div>
 
