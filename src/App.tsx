@@ -153,7 +153,6 @@ const ReadAloudIcon = (props: React.SVGProps<SVGSVGElement>) => {
     </svg>
   );
 };
-
 const MemoizedChapterView = React.memo(({
   chap,
   idx,
@@ -162,13 +161,8 @@ const MemoizedChapterView = React.memo(({
   frameEnabled,
   frameStyles,
   frameBorder,
-  activeParagraphSpacing,
   currentTheme,
   bookTitle,
-  activeFontSize,
-  activeLineHeight,
-  activeFontFamily,
-  isLandscape,
   highlightedParagraph,
   renderTransformedText
 }: any) => {
@@ -180,7 +174,7 @@ const MemoizedChapterView = React.memo(({
       aria-hidden={idx < currentChapterIndex ? "true" : undefined}
       style={{
         ...(frameEnabled ? frameStyles.cardStyle : {}),
-        paddingBottom: `${activeParagraphSpacing}rem`
+        paddingBottom: 'var(--p-margin)'
       }}
     >
       {frameEnabled && frameBorder === 'ornament' && (
@@ -211,7 +205,7 @@ const MemoizedChapterView = React.memo(({
         <h3 
           className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
           style={{ 
-            fontSize: `${activeFontSize * 1.15}px`,
+            fontSize: 'var(--title-font-size)',
             borderColor: frameEnabled ? (frameStyles.cardStyle?.borderColor || currentTheme.border) : currentTheme.border
           }}
         >
@@ -219,13 +213,7 @@ const MemoizedChapterView = React.memo(({
         </h3>
       </div>
 
-      <div 
-        className="select-text transition-all duration-300 columns-1" 
-        style={{ 
-          fontFamily: activeFontFamily,
-          textAlign: isLandscape ? 'justify' : 'left'
-        }}
-      >
+      <div className="select-text transition-all duration-300 columns-1">
         {chap.content.map((para: string, pIdx: number) => {
           const isHighlighted = highlightedParagraph?.chapterId === chap.id && highlightedParagraph?.paragraphIndex === pIdx;
           return (
@@ -237,11 +225,7 @@ const MemoizedChapterView = React.memo(({
                   ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
                   : 'hover:bg-black/5 dark:hover:bg-white/5'
               }`}
-              style={{ 
-                fontSize: `${activeFontSize}px`, 
-                lineHeight: activeLineHeight,
-                marginBottom: `${activeParagraphSpacing}rem`
-              }}
+              style={{ marginBottom: 'var(--p-margin)' }}
             >
               {renderTransformedText(para)}
             </p>
@@ -261,19 +245,12 @@ const MemoizedChapterView = React.memo(({
   
   if (prevProps.frameEnabled !== nextProps.frameEnabled) return false;
   if (prevProps.frameBorder !== nextProps.frameBorder) return false;
-  if (prevProps.activeParagraphSpacing !== nextProps.activeParagraphSpacing) return false;
   if (prevProps.bookTitle !== nextProps.bookTitle) return false;
-  if (prevProps.activeFontSize !== nextProps.activeFontSize) return false;
-  if (prevProps.activeLineHeight !== nextProps.activeLineHeight) return false;
-  if (prevProps.activeFontFamily !== nextProps.activeFontFamily) return false;
-  if (prevProps.isLandscape !== nextProps.isLandscape) return false;
   if (prevProps.renderTransformedText !== nextProps.renderTransformedText) return false;
   
-  // Shallow check for themes/styles
   if (prevProps.currentTheme !== nextProps.currentTheme) return false;
   if (prevProps.frameStyles !== nextProps.frameStyles) return false;
   
-  // Highlighted paragraph check
   const prevHighlight = prevProps.highlightedParagraph?.chapterId === prevProps.chap.id ? prevProps.highlightedParagraph.paragraphIndex : -1;
   const nextHighlight = nextProps.highlightedParagraph?.chapterId === nextProps.chap.id ? nextProps.highlightedParagraph.paragraphIndex : -1;
   if (prevHighlight !== nextHighlight) return false;
@@ -3395,11 +3372,20 @@ export default function App() {
             <div 
               id="reader-content-width-wrapper"
               className={`transition-all duration-300 ${frameEnabled ? '' : 'mx-auto ' + currentWidthClass}`}
-              style={frameEnabled ? { 
-                width: `${frameWidth}%`, 
-                marginLeft: `calc(50% - ${frameWidth / 2}%)`, 
-                marginRight: `calc(50% - ${frameWidth / 2}%)` 
-              } : {}}
+              style={{
+                ...(frameEnabled ? { 
+                  width: `${frameWidth}%`, 
+                  marginLeft: `calc(50% - ${frameWidth / 2}%)`, 
+                  marginRight: `calc(50% - ${frameWidth / 2}%)` 
+                } : {}),
+                fontSize: `${activeFontSize}px`,
+                lineHeight: activeLineHeight,
+                fontFamily: FONT_MAP[fontFamily],
+                textAlign: isLandscape ? 'justify' : 'left',
+                '--p-margin': `${activeParagraphSpacing}rem`,
+                '--title-font-size': `${activeFontSize * 1.15}px`,
+                '--single-title-font-size': `${activeFontSize * 1.2}px`
+              } as React.CSSProperties}
             >
               {/* INFINITE SCROLL RENDER BLOCK */}
               {useWindowScrolling ? (
@@ -3419,13 +3405,8 @@ export default function App() {
                         frameEnabled={frameEnabled}
                         frameStyles={frameStyles}
                         frameBorder={frameBorder}
-                        activeParagraphSpacing={activeParagraphSpacing}
                         currentTheme={currentTheme}
                         bookTitle={bookTitle}
-                        activeFontSize={activeFontSize}
-                        activeLineHeight={activeLineHeight}
-                        activeFontFamily={FONT_MAP[fontFamily]}
-                        isLandscape={isLandscape}
                         highlightedParagraph={highlightedParagraph}
                         renderTransformedText={renderTransformedText}
                       />
@@ -3459,7 +3440,7 @@ export default function App() {
                     <h2 
                       className="font-serif font-bold tracking-tight border-b pb-2" 
                       style={{ 
-                        fontSize: `${activeFontSize * 1.2}px`,
+                        fontSize: 'var(--single-title-font-size)',
                         borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
@@ -3468,13 +3449,7 @@ export default function App() {
                   </div>
 
                   {/* Body paragraphs */}
-                  <div 
-                    className="select-text mb-16 transition-all duration-300 columns-1" 
-                    style={{ 
-                      fontFamily: FONT_MAP[fontFamily],
-                      textAlign: isLandscape ? 'justify' : 'left'
-                    }}
-                  >
+                  <div className="select-text mb-16 transition-all duration-300 columns-1">
                     {activeChapter.content.map((para, pIdx) => {
                       const isHighlighted = highlightedParagraph?.chapterId === activeChapter.id && highlightedParagraph?.paragraphIndex === pIdx;
                       return (
@@ -3486,11 +3461,7 @@ export default function App() {
                               ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
                               : 'hover:bg-black/5 dark:hover:bg-white/5'
                           }`}
-                          style={{ 
-                            fontSize: `${activeFontSize}px`, 
-                            lineHeight: activeLineHeight,
-                            marginBottom: `${activeParagraphSpacing}rem`
-                          }}
+                          style={{ marginBottom: 'var(--p-margin)' }}
                         >
                           {renderTransformedText(para)}
                         </p>

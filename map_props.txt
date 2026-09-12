@@ -1,0 +1,31 @@
+          ) : (
+            <div 
+              id="reader-content-width-wrapper"
+              className={`transition-all duration-300 ${frameEnabled ? '' : 'mx-auto ' + currentWidthClass}`}
+              style={frameEnabled ? { 
+                width: `${frameWidth}%`, 
+                marginLeft: `calc(50% - ${frameWidth / 2}%)`, 
+                marginRight: `calc(50% - ${frameWidth / 2}%)` 
+              } : {}}
+            >
+              {/* INFINITE SCROLL RENDER BLOCK */}
+              {useWindowScrolling ? (
+                <div id="infinite-scroll-container" className="space-y-0">
+                  {(listenMode ? chapters.slice(currentChapterIndex) : chapters).map((chap) => {
+                    const idx = chapters.findIndex(c => c.id === chap.id);
+                    const isFirstRendered = listenMode 
+                      ? chap.id === chapters[currentChapterIndex]?.id 
+                      : idx === 0;
+                    return (
+                      <MemoizedChapterView
+                        key={chap.id}
+                        chap={chap}
+                        idx={idx}
+                        isFirstRendered={isFirstRendered}
+                        currentChapterIndex={currentChapterIndex}
+                        frameEnabled={frameEnabled}
+                        frameStyles={frameStyles}
+                        frameBorder={frameBorder}
+                        activeParagraphSpacing={activeParagraphSpacing}
+                        currentTheme={currentTheme}
+                        bookTitle={bookTitle}
