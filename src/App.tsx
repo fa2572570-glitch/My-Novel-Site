@@ -674,6 +674,7 @@ export default function App() {
 
   // Keep active chapter index synchronized with the active chapter ID when chapters array changes
   const activeChapterIdRef = useRef<string | null>(null);
+  const viewportUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
     const activeChap = chapters[currentChapterIndex];
     if (activeChap) {
@@ -935,38 +936,24 @@ export default function App() {
     if (!useWindowScrolling || chapters.length === 0) return;
     if (isProgrammaticScrolling.current) return;
 
-    const articles = document.querySelectorAll('.chapter-article');
-    if (articles.length === 0) return;
-
-    const viewportHeight = window.innerHeight;
-    // Focal line for active reading: 150px below top of viewport (accounting for header ~60px)
-    const focalY = Math.min(180, Math.max(100, viewportHeight * 0.25));
-
-    let bestIndex = -1;
-    let maxVisibleHeight = -1;
-    let closestDistance = Number.POSITIVE_INFINITY;
-
-    const articleList = Array.from(articles);
-
-    // Priority 1: Chapter spans across the focal line
-    for (const art of articleList) {
-      const indexAttr = art.getAttribute('data-chapter-index');
-      if (indexAttr === null) continue;
-      const index = parseInt(indexAttr, 10);
-      if (isNaN(index)) continue;
-
-      const rect = art.getBoundingClientRect();
-      if (rect.top <= focalY && rect.bottom > focalY) {
-        bestIndex = index;
-        break; // Stop immediately once active chapter spanning focal reading line is found
-      }
+    if (viewportUpdateTimeoutRef.current) {
+      clearTimeout(viewportUpdateTimeoutRef.current);
     }
+    viewportUpdateTimeoutRef.current = setTimeout(() => {
+      const articles = document.querySelectorAll('.chapter-article');
+      if (articles.length === 0) return;
 
-    // Priority 2: If no chapter covers focal line, find chapter with maximum visible height in viewport
-    if (bestIndex === -1) {
+      const viewportHeight = window.innerHeight;
+      // Focal line for active reading: 150px below top of viewport (accounting for header ~60px)
+      const focalY = Math.min(180, Math.max(100, viewportHeight * 0.25));
+
+      let bestIndex = -1;
       let maxVisibleHeight = -1;
       let closestDistance = Number.POSITIVE_INFINITY;
 
+      const articleList = Array.from(articles);
+
+      // Priority 1: Chapter spans across the focal line
       for (const art of articleList) {
         const indexAttr = art.getAttribute('data-chapter-index');
         if (indexAttr === null) continue;
@@ -974,27 +961,46 @@ export default function App() {
         if (isNaN(index)) continue;
 
         const rect = art.getBoundingClientRect();
-        const visibleTop = Math.max(0, rect.top);
-        const visibleBottom = Math.min(viewportHeight, rect.bottom);
-        const visibleHeight = visibleBottom - visibleTop;
-
-        if (visibleHeight > maxVisibleHeight && visibleHeight > 0) {
-          maxVisibleHeight = visibleHeight;
+        if (rect.top <= focalY && rect.bottom > focalY) {
           bestIndex = index;
-        } else if (maxVisibleHeight <= 0) {
-          const distance = Math.abs(rect.top - focalY);
-          if (distance < closestDistance) {
-            closestDistance = distance;
+          break; // Stop immediately once active chapter spanning focal reading line is found
+        }
+      }
+
+      // Priority 2: If no chapter covers focal line, find chapter with maximum visible height in viewport
+      if (bestIndex === -1) {
+        let maxVisibleHeight2 = -1;
+        let closestDistance2 = Number.POSITIVE_INFINITY;
+
+        for (const art of articleList) {
+          const indexAttr = art.getAttribute('data-chapter-index');
+          if (indexAttr === null) continue;
+          const index = parseInt(indexAttr, 10);
+          if (isNaN(index)) continue;
+
+          const rect = art.getBoundingClientRect();
+          const visibleTop = Math.max(0, rect.top);
+          const visibleBottom = Math.min(viewportHeight, rect.bottom);
+          const visibleHeight = visibleBottom - visibleTop;
+
+          if (visibleHeight > maxVisibleHeight2 && visibleHeight > 0) {
+            maxVisibleHeight2 = visibleHeight;
             bestIndex = index;
+          } else if (maxVisibleHeight2 <= 0) {
+            const distance = Math.abs(rect.top - focalY);
+            if (distance < closestDistance2) {
+              closestDistance2 = distance;
+              bestIndex = index;
+            }
           }
         }
       }
-    }
 
-    if (bestIndex !== -1 && bestIndex !== currentChapterIndexRef.current) {
-      isScrollingFromObserver.current = true;
-      setCurrentChapterIndex(bestIndex);
-    }
+      if (bestIndex !== -1 && bestIndex !== currentChapterIndexRef.current) {
+        isScrollingFromObserver.current = true;
+        setCurrentChapterIndex(bestIndex);
+      }
+    }, 150);
   }, [useWindowScrolling, chapters]);
 
   // Load last scroll position or scroll to top on chapter change
@@ -1056,7 +1062,10 @@ export default function App() {
 
   // Handle scroll tracking to auto-save position and update active chapter on scroll
   useEffect(() => {
-    const handleScroll = () => {
+    let scrollTimeout: NodeJS.Timeout | null = null;
+    let lastScrollTime = 0;
+
+    const executeScrollLogic = () => {
       if (useWindowScrolling) {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
         if (isInfiniteScrollingMode) {
@@ -1076,6 +1085,20 @@ export default function App() {
       }
     };
 
+    const handleScroll = () => {
+      const now = Date.now();
+      if (now - lastScrollTime < 150) {
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          lastScrollTime = Date.now();
+          executeScrollLogic();
+        }, 150);
+        return;
+      }
+      lastScrollTime = now;
+      executeScrollLogic();
+    };
+
     if (useWindowScrolling) {
       window.addEventListener('scroll', handleScroll, { passive: true });
       window.addEventListener('resize', handleScroll, { passive: true });
@@ -1087,6 +1110,7 @@ export default function App() {
     }
 
     return () => {
+      if (scrollTimeout) clearTimeout(scrollTimeout);
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleScroll);
       if (readerFrameRef.current) {
