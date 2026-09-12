@@ -154,6 +154,132 @@ const ReadAloudIcon = (props: React.SVGProps<SVGSVGElement>) => {
   );
 };
 
+const MemoizedChapterView = React.memo(({
+  chap,
+  idx,
+  isFirstRendered,
+  currentChapterIndex,
+  frameEnabled,
+  frameStyles,
+  frameBorder,
+  activeParagraphSpacing,
+  currentTheme,
+  bookTitle,
+  activeFontSize,
+  activeLineHeight,
+  activeFontFamily,
+  isLandscape,
+  highlightedParagraph,
+  renderTransformedText
+}: any) => {
+  return (
+    <article 
+      id={`chap-article-${chap.id}`}
+      data-chapter-index={idx}
+      className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
+      aria-hidden={idx < currentChapterIndex ? "true" : undefined}
+      style={{
+        ...(frameEnabled ? frameStyles.cardStyle : {}),
+        paddingBottom: `${activeParagraphSpacing}rem`
+      }}
+    >
+      {frameEnabled && frameBorder === 'ornament' && (
+        <div 
+          className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
+          style={{ borderColor: frameStyles.cardStyle?.borderColor || 'rgba(0,0,0,0.15)' }} 
+        />
+      )}
+
+      {!isFirstRendered && (
+        <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
+          <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? (frameStyles.cardStyle?.color || currentTheme.text) : currentTheme.text }} />
+          <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
+            {bookTitle}
+          </h2>
+          <hr className="w-1/12 mx-auto opacity-20 mt-4" style={{ borderColor: currentTheme.accent }} />
+        </div>
+      )}
+
+      {isFirstRendered && (
+        <div id="first-chapter-header" className="text-center pb-8 select-none">
+          <h1 className="font-serif text-4xl md:text-5xl font-bold mb-4 tracking-tight">{bookTitle}</h1>
+          <hr className="w-1/12 mx-auto opacity-20 mb-8" style={{ borderColor: currentTheme.accent }} />
+        </div>
+      )}
+
+      <div className="mb-10 text-left">
+        <h3 
+          className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
+          style={{ 
+            fontSize: `${activeFontSize * 1.15}px`,
+            borderColor: frameEnabled ? (frameStyles.cardStyle?.borderColor || currentTheme.border) : currentTheme.border
+          }}
+        >
+          {renderTransformedText(chap.title)}
+        </h3>
+      </div>
+
+      <div 
+        className="select-text transition-all duration-300 columns-1" 
+        style={{ 
+          fontFamily: activeFontFamily,
+          textAlign: isLandscape ? 'justify' : 'left'
+        }}
+      >
+        {chap.content.map((para: string, pIdx: number) => {
+          const isHighlighted = highlightedParagraph?.chapterId === chap.id && highlightedParagraph?.paragraphIndex === pIdx;
+          return (
+            <p 
+              id={`chap-${chap.id}-p-${pIdx}`}
+              key={pIdx} 
+              className={`leading-relaxed rounded px-2 py-1 transition-all duration-1000 ${
+                isHighlighted 
+                  ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
+                  : 'hover:bg-black/5 dark:hover:bg-white/5'
+              }`}
+              style={{ 
+                fontSize: `${activeFontSize}px`, 
+                lineHeight: activeLineHeight,
+                marginBottom: `${activeParagraphSpacing}rem`
+              }}
+            >
+              {renderTransformedText(para)}
+            </p>
+          );
+        })}
+      </div>
+    </article>
+  );
+}, (prevProps, nextProps) => {
+  if (prevProps.chap !== nextProps.chap) return false;
+  if (prevProps.idx !== nextProps.idx) return false;
+  if (prevProps.isFirstRendered !== nextProps.isFirstRendered) return false;
+  
+  const prevHidden = prevProps.idx < prevProps.currentChapterIndex;
+  const nextHidden = nextProps.idx < nextProps.currentChapterIndex;
+  if (prevHidden !== nextHidden) return false;
+  
+  if (prevProps.frameEnabled !== nextProps.frameEnabled) return false;
+  if (prevProps.frameBorder !== nextProps.frameBorder) return false;
+  if (prevProps.activeParagraphSpacing !== nextProps.activeParagraphSpacing) return false;
+  if (prevProps.bookTitle !== nextProps.bookTitle) return false;
+  if (prevProps.activeFontSize !== nextProps.activeFontSize) return false;
+  if (prevProps.activeLineHeight !== nextProps.activeLineHeight) return false;
+  if (prevProps.activeFontFamily !== nextProps.activeFontFamily) return false;
+  if (prevProps.isLandscape !== nextProps.isLandscape) return false;
+  if (prevProps.renderTransformedText !== nextProps.renderTransformedText) return false;
+  
+  // Shallow check for themes/styles
+  if (prevProps.currentTheme !== nextProps.currentTheme) return false;
+  if (prevProps.frameStyles !== nextProps.frameStyles) return false;
+  
+  // Highlighted paragraph check
+  const prevHighlight = prevProps.highlightedParagraph?.chapterId === prevProps.chap.id ? prevProps.highlightedParagraph.paragraphIndex : -1;
+  const nextHighlight = nextProps.highlightedParagraph?.chapterId === nextProps.chap.id ? nextProps.highlightedParagraph.paragraphIndex : -1;
+  if (prevHighlight !== nextHighlight) return false;
+  
+  return true;
+});
 export default function App() {
   // --- LIBRARY STATE ---
   const [chapters, setChapters] = useState<Chapter[]>(() => {
@@ -3284,87 +3410,25 @@ export default function App() {
                       ? chap.id === chapters[currentChapterIndex]?.id 
                       : idx === 0;
                     return (
-                      <article 
-                        id={`chap-article-${chap.id}`}
+                      <MemoizedChapterView
                         key={chap.id}
-                        data-chapter-index={idx}
-                        className={frameEnabled ? `chapter-article ${frameStyles.cardClass} mb-12 scroll-mt-20` : "chapter-article relative transition-all duration-300 mb-12 select-text scroll-mt-20"}
-                        aria-hidden={idx < currentChapterIndex ? "true" : undefined}
-                        style={{
-                          ...(frameEnabled ? frameStyles.cardStyle : {}),
-                          paddingBottom: `${activeParagraphSpacing}rem`
-                        }}
-                      >
-                        {frameEnabled && frameBorder === 'ornament' && (
-                          <div 
-                            className="absolute inset-3 pointer-events-none rounded-[inherit] border border-dashed opacity-40"
-                            style={{ borderColor: (frameStyles.cardStyle as Record<string, string>)?.borderColor || 'rgba(0,0,0,0.15)' }} 
-                          />
-                        )}
-
-                        {/* Visual separator between chapters in Infinite Mode */}
-                        {!isFirstRendered && (
-                          <div id={`hearts-separator-${idx}`} className="text-center py-12 select-none relative">
-                            <hr className="w-1/3 mx-auto opacity-10 mb-8" style={{ borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.color || currentTheme.text) : currentTheme.text }} />
-                            <h2 className="font-serif text-2xl md:text-3xl font-semibold mb-2" style={{ letterSpacing: '0.05em' }}>
-                              {bookTitle}
-                            </h2>
-                            <hr className="w-1/12 mx-auto opacity-20 mt-4" style={{ borderColor: currentTheme.accent }} />
-                          </div>
-                        )}
-
-                        {/* Header for the first chapter in the list */}
-                        {isFirstRendered && (
-                          <div id="first-chapter-header" className="text-center pb-8 select-none">
-                            <h1 className="font-serif text-4xl md:text-5xl font-bold mb-4 tracking-tight">{bookTitle}</h1>
-                            <hr className="w-1/12 mx-auto opacity-20 mb-8" style={{ borderColor: currentTheme.accent }} />
-                          </div>
-                        )}
-
-                        {/* Chapter Title block */}
-                        <div className="mb-10 text-left">
-                          <h3 
-                            className="font-serif font-semibold tracking-tight leading-snug select-text opacity-90 border-b pb-2" 
-                            style={{ 
-                              fontSize: `${activeFontSize * 1.15}px`,
-                              borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
-                            }}
-                          >
-                            {renderTransformedText(chap.title)}
-                          </h3>
-                        </div>
-
-                        {/* Chapter Content Paragraphs */}
-                        <div 
-                          className="select-text transition-all duration-300 columns-1" 
-                          style={{ 
-                            fontFamily: FONT_MAP[fontFamily],
-                            textAlign: isLandscape ? 'justify' : 'left'
-                          }}
-                        >
-                          {chap.content.map((para, pIdx) => {
-                            const isHighlighted = highlightedParagraph?.chapterId === chap.id && highlightedParagraph?.paragraphIndex === pIdx;
-                            return (
-                              <p 
-                                id={`chap-${chap.id}-p-${pIdx}`}
-                                key={pIdx} 
-                                className={`leading-relaxed rounded px-2 py-1 transition-all duration-1000 ${
-                                  isHighlighted 
-                                    ? 'bg-[#FF79B0]/25 dark:bg-[#FF79B0]/35 ring-2 ring-[#FF79B0]/60 shadow-lg' 
-                                    : 'hover:bg-black/5 dark:hover:bg-white/5'
-                                }`}
-                                style={{ 
-                                  fontSize: `${activeFontSize}px`, 
-                                  lineHeight: activeLineHeight,
-                                  marginBottom: `${activeParagraphSpacing}rem`
-                                }}
-                              >
-                                {renderTransformedText(para)}
-                              </p>
-                            );
-                          })}
-                        </div>
-                      </article>
+                        chap={chap}
+                        idx={idx}
+                        isFirstRendered={isFirstRendered}
+                        currentChapterIndex={currentChapterIndex}
+                        frameEnabled={frameEnabled}
+                        frameStyles={frameStyles}
+                        frameBorder={frameBorder}
+                        activeParagraphSpacing={activeParagraphSpacing}
+                        currentTheme={currentTheme}
+                        bookTitle={bookTitle}
+                        activeFontSize={activeFontSize}
+                        activeLineHeight={activeLineHeight}
+                        activeFontFamily={FONT_MAP[fontFamily]}
+                        isLandscape={isLandscape}
+                        highlightedParagraph={highlightedParagraph}
+                        renderTransformedText={renderTransformedText}
+                      />
                     );
                   })}
                   <div ref={chaptersEndRef} className="text-center py-12 select-none" style={{ color: currentTheme.secondaryText }}>
