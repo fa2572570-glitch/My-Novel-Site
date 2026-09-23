@@ -34,21 +34,12 @@ import {
   Infinity,
   Sliders,
   ArrowRight,
-  ArrowUp,
-  ArrowDown,
-  Volume2,
   Wand2
 } from 'lucide-react';
-import { TerminologyRule, IgnoreTerm, LineCleanerRule } from './types/terminology';
+import { TerminologyRule, IgnoreTerm } from './types/terminology';
 import { applyTerminology, getDefaultTerminologyRules, getDefaultIgnoreTerms } from './utils/terminology';
 import { TerminologyManagerModal } from './components/TerminologyManagerModal';
 import { TerminologyErrorBoundary } from './components/TerminologyErrorBoundary';
-import { TTSSentenceParagraph } from './components/TTSSentenceParagraph';
-import { TTSActivePosition } from './types/tts';
-import { useEdgeReadAloud } from './hooks/useEdgeReadAloud';
-import { EdgeReadAloudBar } from './components/EdgeReadAloudBar';
-import { EdgeVoiceOptionsModal } from './components/EdgeVoiceOptionsModal';
-import { TTSRecenterFloatingButton } from './components/TTSRecenterFloatingButton';
 
 // Define Interface for Chapter
 interface Chapter {
@@ -173,11 +164,7 @@ const MemoizedChapterView = React.memo(({
   currentTheme,
   bookTitle,
   highlightedParagraph,
-  renderTransformedText,
-  activeTTSPosition,
-  isTTSActive,
-  highlightMode,
-  onSentenceClick
+  renderTransformedText
 }: any) => {
   return (
     <article 
@@ -222,17 +209,7 @@ const MemoizedChapterView = React.memo(({
             borderColor: frameEnabled ? (frameStyles.cardStyle?.borderColor || currentTheme.border) : currentTheme.border
           }}
         >
-          <TTSSentenceParagraph
-            text={renderTransformedText(chap.title)}
-            chapterId={chap.id}
-            chapterIndex={idx}
-            paragraphIndex={-1}
-            activeTTSPosition={activeTTSPosition}
-            isTTSActive={isTTSActive}
-            highlightMode={highlightMode}
-            onSentenceClick={onSentenceClick}
-            isTitle={true}
-          />
+          {renderTransformedText(chap.title)}
         </h3>
       </div>
 
@@ -250,16 +227,7 @@ const MemoizedChapterView = React.memo(({
               }`}
               style={{ marginBottom: 'var(--p-margin)' }}
             >
-              <TTSSentenceParagraph
-                text={renderTransformedText(para)}
-                chapterId={chap.id}
-                chapterIndex={idx}
-                paragraphIndex={pIdx}
-                activeTTSPosition={activeTTSPosition}
-                isTTSActive={isTTSActive}
-                highlightMode={highlightMode}
-                onSentenceClick={onSentenceClick}
-              />
+              {renderTransformedText(para)}
             </p>
           );
         })}
@@ -286,16 +254,6 @@ const MemoizedChapterView = React.memo(({
   const prevHighlight = prevProps.highlightedParagraph?.chapterId === prevProps.chap.id ? prevProps.highlightedParagraph.paragraphIndex : -1;
   const nextHighlight = nextProps.highlightedParagraph?.chapterId === nextProps.chap.id ? nextProps.highlightedParagraph.paragraphIndex : -1;
   if (prevHighlight !== nextHighlight) return false;
-  
-  // Re-render only if this specific chapter is involved with active TTS position
-  const prevActiveChap = prevProps.activeTTSPosition?.chapterId === prevProps.chap.id;
-  const nextActiveChap = nextProps.activeTTSPosition?.chapterId === nextProps.chap.id;
-  if (prevActiveChap || nextActiveChap) {
-    if (prevProps.activeTTSPosition?.paragraphIndex !== nextProps.activeTTSPosition?.paragraphIndex) return false;
-    if (prevProps.activeTTSPosition?.sentenceIndex !== nextProps.activeTTSPosition?.sentenceIndex) return false;
-    if (prevProps.activeTTSPosition?.wordIndex !== nextProps.activeTTSPosition?.wordIndex) return false;
-    if (prevProps.isTTSActive !== nextProps.isTTSActive) return false;
-  }
   
   return true;
 });
@@ -445,31 +403,6 @@ export default function App() {
     return getDefaultIgnoreTerms();
   });
 
-  const [cleanerRules, setCleanerRules] = useState<LineCleanerRule[]>(() => {
-    try {
-      const saved = localStorage.getItem('novel_cleaner_rules');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((r): r is LineCleanerRule => Boolean(r && typeof r === 'object' && r.pattern)).map(r => ({
-            id: r.id || `cleaner-${Math.random().toString(36).substring(2, 7)}`,
-            pattern: String(r.pattern),
-            mode: r.mode || 'contains',
-            enabled: r.enabled !== false,
-            scope: r.scope === 'novel' ? 'novel' : 'global',
-            bookTitle: r.bookTitle,
-            caseSensitive: r.caseSensitive === true,
-            removedCount: typeof r.removedCount === 'number' ? r.removedCount : 0,
-            createdAt: typeof r.createdAt === 'number' ? r.createdAt : Date.now()
-          }));
-        }
-      }
-    } catch (e) {
-      console.error('Error loading cleaner rules:', e);
-    }
-    return [];
-  });
-
   const [isTerminologyModalOpen, setIsTerminologyModalOpen] = useState(false);
 
   // Reset Terminology Rules & Recover from corrupted storage
@@ -501,10 +434,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('novel_ignore_terms', JSON.stringify(ignoreTerms));
   }, [ignoreTerms]);
-
-  useEffect(() => {
-    localStorage.setItem('novel_cleaner_rules', JSON.stringify(cleanerRules));
-  }, [cleanerRules]);
 
   // Helper to dynamically apply terminology replacements to chapter title or text without modifying source data
   const renderTransformedText = useCallback((text: string) => {
@@ -595,67 +524,6 @@ export default function App() {
   const isInfiniteScrollingMode = infiniteScroll && !listenMode;
   const useWindowScrolling = isInfiniteScrollingMode || listenMode;
 
-  // --- MICROSOFT EDGE READ ALOUD (PART 4: SETTINGS, SLEEP TIMER & CACHE) ---
-  const [isVoiceOptionsOpen, setIsVoiceOptionsOpen] = useState(false);
-  const {
-    state: ttsState,
-    SPEED_OPTIONS: ttsSpeedOptions,
-    settings: ttsSettings,
-    togglePlayPause: ttsTogglePlayPause,
-    seekToSentence: ttsSeekToSentence,
-    seekToChapterSentence: ttsSeekToChapterSentence,
-    nextSentence: ttsNextSentence,
-    prevSentence: ttsPrevSentence,
-    setPlaybackSpeed: ttsSetPlaybackSpeed,
-    stopReadAloud: ttsStopReadAloud,
-    setVoice: ttsSetVoice,
-    setPitch: ttsSetPitch,
-    setHighlightMode: ttsSetHighlightMode,
-    setAutoScrollMode: ttsSetAutoScrollMode,
-    setVolume: ttsSetVolume,
-    setSyncOffset: ttsSetSyncOffset,
-    setShowClockInBar: ttsSetShowClockInBar,
-    setSleepTimer: ttsSetSleepTimer,
-    preloadChapter: ttsPreloadChapter,
-    preloadNextChapters: ttsPreloadNextChapters,
-    clearCache: ttsClearCache,
-    getCacheStats: ttsGetCacheStats,
-    getLastSavedPosition: ttsGetLastSavedPosition,
-    resumeLastPosition: ttsResumeLastPosition,
-    isDetached: ttsIsDetached,
-    detachedDirection: ttsDetachedDirection,
-    recenterOnActiveSentence: ttsRecenterOnActiveSentence
-  } = useEdgeReadAloud({
-    chapters,
-    currentChapterIndex,
-    novelId: bookTitle || 'novel',
-    novelTitle: bookTitle,
-    onChapterChange: (newIndex) => {
-      setCurrentChapterIndex(newIndex);
-      const nextChap = chapters[newIndex];
-      if (nextChap) {
-        const el = document.getElementById(`chapter-${nextChap.id}`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }
-    }
-  });
-
-  const activeTTSPosition = ttsState.activePosition;
-  const isTTSActive = ttsState.isPlaying || ttsState.isActive;
-
-  const handleSentenceClick = useCallback((
-    chapterId: string,
-    chapterIndex: number,
-    paragraphIndex: number,
-    sentenceIndex: number,
-    _sentenceText: string
-  ) => {
-    ttsSeekToSentence(chapterId, chapterIndex, paragraphIndex, sentenceIndex);
-  }, [ttsSeekToSentence]);
-
-
   // --- AESTHETIC BOOK-PAGE FRAMING STATE ---
   const [frameEnabled, setFrameEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('novel_frame_enabled');
@@ -695,8 +563,8 @@ export default function App() {
   const [pasteCustomDelimiter, setPasteCustomDelimiter] = useState('---');
 
   // --- SMART URL SCRAPER RANGE STATE ---
-  const [startUrl, setStartUrl] = useState('');
-  const [endUrl, setEndUrl] = useState('');
+  const [startUrl, setStartUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-1/');
+  const [endUrl, setEndUrl] = useState('https://bcatranslation.com/novel/deep-sea-embers/chapter-3/');
   const [scrapingQueue, setScrapingQueue] = useState<{ number: number; url: string; status: 'idle' | 'fetching' | 'completed' | 'failed'; error?: string; title?: string }[]>([]);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeProgressIndex, setScrapeProgressIndex] = useState(0);
@@ -803,9 +671,14 @@ export default function App() {
   };
 
   const handleToggleReadingMode = () => {
-    ttsTogglePlayPause();
+    if (listenMode) {
+      setListenMode(false);
+      setInfiniteScroll(true);
+    } else {
+      setListenMode(true);
+      setInfiniteScroll(false);
+    }
   };
-
 
   // --- ELEMENT REFS ---
   const readerContainerRef = useRef<HTMLDivElement>(null);
@@ -952,13 +825,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('novel_theme', theme);
-    const isDark = theme === 'dark' || (theme === 'custom' && isBgDark(customBgColor));
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [theme, customBgColor]);
+  }, [theme]);
 
   useEffect(() => {
     localStorage.setItem('novel_custom_bg', customBgColor);
@@ -3208,23 +3075,6 @@ export default function App() {
         style={frameEnabled ? frameStyles.outerStyle : {}}
       >
         
-        {/* Microsoft Edge Read Aloud Floating Top Bar */}
-        <EdgeReadAloudBar
-          state={ttsState}
-          speedOptions={ttsSpeedOptions}
-          currentTheme={currentTheme}
-          chapterTitle={chapters[ttsState.currentChapterIndex]?.title}
-          onTogglePlayPause={ttsTogglePlayPause}
-          onPrevSentence={ttsPrevSentence}
-          onNextSentence={ttsNextSentence}
-          onSetSpeed={ttsSetPlaybackSpeed}
-          onClose={ttsStopReadAloud}
-          onOpenVoiceOptions={() => setIsVoiceOptionsOpen(true)}
-          onSeekToChapterSentence={ttsSeekToChapterSentence}
-          isDetached={ttsIsDetached}
-          onRecenter={ttsRecenterOnActiveSentence}
-        />
-
         {/* Floating Controls Overlay (Visible when not distraction free, or on hover/trigger) */}
         {!isDistractionFree && (
           <header 
@@ -3268,23 +3118,25 @@ export default function App() {
 
             {/* Right side: Infinity Toggle, Search, and Aa Settings */}
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-              {/* Reading Mode / Read Aloud Toggle Button */}
+              {/* Reading Mode / Infinity Mode Toggle Button */}
               <button 
                 id="reading-mode-toggle-btn"
                 onClick={handleToggleReadingMode}
-                className={`p-2 sm:p-2.5 rounded-xl transition-all duration-150 flex items-center gap-1.5 cursor-pointer active:scale-95 font-bold ${
-                  ttsState.isActive 
-                    ? 'bg-blue-600/25 text-blue-400 border border-blue-500/50 shadow-sm shadow-blue-500/20 ring-1 ring-blue-500/30' 
-                    : 'bg-[#FF79B0]/20 text-[#FF79B0] border border-[#FF79B0]/40 shadow-sm shadow-[#FF79B0]/20 ring-1 ring-[#FF79B0]/30 hover:bg-[#FF79B0]/30 hover:border-[#FF79B0]/60'
-                }`}
-                title={ttsState.isPlaying ? "Pause Read Aloud" : "Start Read Aloud (Edge Steffan Voice)"}
+                className="p-2 sm:p-2.5 rounded-xl transition-all duration-150 flex items-center gap-1.5 cursor-pointer active:scale-95 bg-[#FF79B0]/20 text-[#FF79B0] border border-[#FF79B0]/40 shadow-sm shadow-[#FF79B0]/20 ring-1 ring-[#FF79B0]/30 font-bold hover:bg-[#FF79B0]/30 hover:border-[#FF79B0]/60"
+                title={listenMode ? "Switch to Infinite Scroll Mode" : "Switch to Read Aloud / Listen Mode"}
               >
-                <ReadAloudIcon className={`w-4.5 h-4.5 ${ttsState.isPlaying ? 'animate-pulse text-blue-400' : ''}`} />
-                <span className="hidden md:inline-block text-xs font-bold">
-                  {ttsState.isPlaying ? 'Listening' : 'Read Aloud'}
-                </span>
+                {listenMode ? (
+                  <>
+                    <ReadAloudIcon className="w-4.5 h-4.5 animate-pulse" />
+                    <span className="hidden md:inline-block text-xs font-bold">Read Aloud</span>
+                  </>
+                ) : (
+                  <>
+                    <Infinity className="w-4.5 h-4.5 animate-pulse" />
+                    <span className="hidden md:inline-block text-xs font-bold">Infinity</span>
+                  </>
+                )}
               </button>
-
 
               {/* Search Toggle */}
               <button 
@@ -3557,10 +3409,6 @@ export default function App() {
                         bookTitle={bookTitle}
                         highlightedParagraph={highlightedParagraph}
                         renderTransformedText={renderTransformedText}
-                        activeTTSPosition={activeTTSPosition}
-                        isTTSActive={isTTSActive}
-                        highlightMode={ttsSettings.highlightMode}
-                        onSentenceClick={handleSentenceClick}
                       />
                     );
                   })}
@@ -3596,17 +3444,7 @@ export default function App() {
                         borderColor: frameEnabled ? ((frameStyles.cardStyle as Record<string, string>)?.borderColor || currentTheme.border) : currentTheme.border
                       }}
                     >
-                      <TTSSentenceParagraph
-                        text={renderTransformedText(activeChapter.title)}
-                        chapterId={activeChapter.id}
-                        chapterIndex={currentChapterIndex}
-                        paragraphIndex={-1}
-                        activeTTSPosition={activeTTSPosition}
-                        isTTSActive={isTTSActive}
-                        highlightMode={ttsSettings.highlightMode}
-                        onSentenceClick={handleSentenceClick}
-                        isTitle={true}
-                      />
+                      {renderTransformedText(activeChapter.title)}
                     </h2>
                   </div>
 
@@ -3625,16 +3463,7 @@ export default function App() {
                           }`}
                           style={{ marginBottom: 'var(--p-margin)' }}
                         >
-                          <TTSSentenceParagraph
-                            text={renderTransformedText(para)}
-                            chapterId={activeChapter.id}
-                            chapterIndex={currentChapterIndex}
-                            paragraphIndex={pIdx}
-                            activeTTSPosition={activeTTSPosition}
-                            isTTSActive={isTTSActive}
-                            highlightMode={ttsSettings.highlightMode}
-                            onSentenceClick={handleSentenceClick}
-                          />
+                          {renderTransformedText(para)}
                         </p>
                       );
                     })}
@@ -3672,14 +3501,6 @@ export default function App() {
           )}
         </div>
       </div>
-
-      {/* Return to Spoken Text Floating Circle Button (Microsoft Edge style with Hold-to-drag & Smart edge snapping) */}
-      <TTSRecenterFloatingButton
-        isVisible={Boolean(ttsIsDetached && isTTSActive)}
-        direction={ttsDetachedDirection}
-        onRecenter={ttsRecenterOnActiveSentence}
-        currentTheme={currentTheme}
-      />
 
       {/* 4. CHAPTER EDITING DIALOG / MODAL */}
       {editingChapter && (
@@ -4559,29 +4380,6 @@ export default function App() {
         </div>
       )}
 
-      {/* MICROSOFT EDGE READ ALOUD VOICE OPTIONS & ADVANCED SETTINGS MODAL */}
-      <EdgeVoiceOptionsModal
-        isOpen={isVoiceOptionsOpen}
-        onClose={() => setIsVoiceOptionsOpen(false)}
-        settings={ttsSettings}
-        sleepTimerMinutes={ttsState.sleepTimerMinutes}
-        sleepTimerRemainingSec={ttsState.sleepTimerRemainingSec}
-        currentChapterIndex={ttsState.currentChapterIndex}
-        currentTheme={currentTheme}
-        onSetVoice={ttsSetVoice}
-        onSetPitch={ttsSetPitch}
-        onSetHighlightMode={ttsSetHighlightMode}
-        onSetAutoScrollMode={ttsSetAutoScrollMode}
-        onSetVolume={ttsSetVolume}
-        onSetSyncOffset={ttsSetSyncOffset}
-        onSetShowClockInBar={ttsSetShowClockInBar}
-        onSetSleepTimer={ttsSetSleepTimer}
-        onPreloadChapter={ttsPreloadChapter}
-        onPreloadNextChapters={ttsPreloadNextChapters}
-        onClearCache={ttsClearCache}
-        onGetCacheStats={ttsGetCacheStats}
-      />
-
       {/* GLOBAL & PER-NOVEL TERMINOLOGY MANAGER MODAL WITH ERROR BOUNDARY */}
       <TerminologyErrorBoundary
         isOpen={isTerminologyModalOpen}
@@ -4595,11 +4393,6 @@ export default function App() {
           setRules={setTerminologyRules}
           ignoreTerms={ignoreTerms}
           setIgnoreTerms={setIgnoreTerms}
-          cleanerRules={cleanerRules}
-          setCleanerRules={setCleanerRules}
-          chapters={chapters}
-          setChapters={setChapters}
-          currentChapterIndex={currentChapterIndex}
           currentBookTitle={bookTitle}
           isTerminologyEnabled={isTerminologyEnabled}
           setIsTerminologyEnabled={setIsTerminologyEnabled}

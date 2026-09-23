@@ -3,16 +3,6 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import * as cheerio from 'cheerio';
-import {
-  EDGE_TTS_VOICE,
-  AUDIO_CACHE_DIR,
-  METADATA_CACHE_DIR,
-  planChapterChunks,
-  synthesizeChunk,
-  preloadChunks,
-  getTTSCacheStats,
-  clearTTSCache
-} from './server/ttsService';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -312,113 +302,6 @@ async function startServer() {
     } catch (error: any) {
       console.error('Error fetching/parsing page:', error);
       return res.status(500).json({ error: error.message || 'Server error' });
-    }
-  });
-
-  // --- MICROSOFT EDGE READ ALOUD TTS API ROUTES ---
-
-  // 1. TTS Health & Status
-  app.get('/api/tts/status', (req, res) => {
-    res.json({
-      status: 'ok',
-      voice: EDGE_TTS_VOICE,
-      cache: getTTSCacheStats()
-    });
-  });
-
-  // TTS Cache Statistics
-  app.get('/api/tts/stats', (req, res) => {
-    res.json(getTTSCacheStats());
-  });
-
-  // Clear TTS Cache
-  app.post('/api/tts/cache/clear', (req, res) => {
-    try {
-      const result = clearTTSCache();
-      res.json({ success: true, ...result });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message || 'Failed to clear cache' });
-    }
-  });
-
-  // 2. Plan Chapter Chunks & Check Cache
-  app.post('/api/tts/plan', (req, res) => {
-    try {
-      const { chapter, novelId, voice, pitch } = req.body;
-      if (!chapter || !chapter.id) {
-        return res.status(400).json({ error: 'Chapter with id is required' });
-      }
-
-      const plan = planChapterChunks(chapter, novelId || 'novel', { voice, pitch });
-      return res.json(plan);
-    } catch (error: any) {
-      console.error('Error in /api/tts/plan:', error);
-      return res.status(500).json({ error: error.message || 'Failed to plan TTS chunks' });
-    }
-  });
-
-  // 3. Synthesize or Fetch Single Chunk from Cache
-  app.post('/api/tts/chunk', async (req, res) => {
-    try {
-      const { chunk } = req.body;
-      if (!chunk || !chunk.hash || !chunk.text) {
-        return res.status(400).json({ error: 'Valid chunk object with hash and text is required' });
-      }
-
-      const metadata = await synthesizeChunk(chunk);
-      return res.json(metadata);
-    } catch (error: any) {
-      console.error('Error in /api/tts/chunk:', error);
-      return res.status(500).json({ error: error.message || 'Failed to synthesize TTS chunk' });
-    }
-  });
-
-  // 4. Serve Cached Audio File (with Range request support for mobile Chrome seeking)
-  app.get('/api/tts/audio/:filename', (req, res) => {
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(AUDIO_CACHE_DIR, filename);
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Audio file not found' });
-    }
-
-    res.sendFile(filePath, {
-      acceptRanges: true,
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=31536000, immutable'
-      }
-    });
-  });
-
-  // 5. Serve Cached Metadata JSON
-  app.get('/api/tts/metadata/:filename', (req, res) => {
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(METADATA_CACHE_DIR, filename);
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Metadata file not found' });
-    }
-
-    res.sendFile(filePath, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=31536000, immutable'
-      }
-    });
-  });
-
-  // 6. Background Preload Chunks
-  app.post('/api/tts/preload', async (req, res) => {
-    try {
-      const { chunks } = req.body;
-      if (Array.isArray(chunks) && chunks.length > 0) {
-        preloadChunks(chunks).catch(err => console.warn('TTS preload error:', err));
-        return res.json({ scheduled: chunks.length });
-      }
-      return res.json({ scheduled: 0 });
-    } catch (error: any) {
-      return res.status(500).json({ error: error.message || 'Preload failed' });
     }
   });
 
