@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BookOpen, 
   Settings, 
@@ -24,15 +24,34 @@ import {
   Globe,
   Book,
   CheckSquare,
-  Square
+  Square,
+  Eraser,
+  Undo2,
+  AlertCircle,
+  CheckCircle2,
+  Zap,
+  RefreshCw,
+  FileText,
+  ListFilter
 } from 'lucide-react';
 import { 
   TerminologyRule, 
   IgnoreTerm, 
   TermCategory, 
-  TERMINOLOGY_CATEGORIES 
+  TERMINOLOGY_CATEGORIES,
+  LineCleanerRule,
+  CleanerMatchMode,
+  TerminologyDictionaryExport
 } from '../types/terminology';
+import { Chapter } from '../types/novel';
 import { testTerminologyPreview } from '../utils/terminology';
+import { 
+  scanChaptersForPattern, 
+  executeCleanChapters, 
+  executeAllCleanerRules,
+  COMMON_CLEANER_PRESETS,
+  CleanScanResult
+} from '../utils/cleaner';
 
 interface TerminologyManagerModalProps {
   isOpen: boolean;
@@ -41,6 +60,11 @@ interface TerminologyManagerModalProps {
   setRules: React.Dispatch<React.SetStateAction<TerminologyRule[]>>;
   ignoreTerms: IgnoreTerm[];
   setIgnoreTerms: React.Dispatch<React.SetStateAction<IgnoreTerm[]>>;
+  cleanerRules?: LineCleanerRule[];
+  setCleanerRules?: React.Dispatch<React.SetStateAction<LineCleanerRule[]>>;
+  chapters?: Chapter[];
+  setChapters?: React.Dispatch<React.SetStateAction<Chapter[]>>;
+  currentChapterIndex?: number;
   currentBookTitle: string;
   isTerminologyEnabled: boolean;
   setIsTerminologyEnabled: (enabled: boolean) => void;
@@ -54,13 +78,18 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
   setRules,
   ignoreTerms,
   setIgnoreTerms,
+  cleanerRules = [],
+  setCleanerRules,
+  chapters = [],
+  setChapters,
+  currentChapterIndex = 0,
   currentBookTitle,
   isTerminologyEnabled,
   setIsTerminologyEnabled,
   showNotification
 }) => {
   // Main Tab State
-  const [activeTab, setActiveTab] = useState<'rules' | 'ignore' | 'preview' | 'stats'>('rules');
+  const [activeTab, setActiveTab] = useState<'rules' | 'ignore' | 'preview' | 'stats' | 'cleaner'>('rules');
   
   // Scope Filter: 'all' | 'global' | 'novel'
   const [scopeFilter, setScopeFilter] = useState<'all' | 'global' | 'novel'>('all');
@@ -101,6 +130,17 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
   // Bulk Move Category Select
   const [bulkCategoryTarget, setBulkCategoryTarget] = useState<TermCategory>('Characters');
 
+  // LINE CLEANER TAB STATE
+  const [cleanerInput, setCleanerInput] = useState('');
+  const [cleanerMode, setCleanerMode] = useState<CleanerMatchMode>('contains');
+  const [cleanerCaseSensitive, setCleanerCaseSensitive] = useState(false);
+  const [cleanerScope, setCleanerScope] = useState<'all' | 'current'>('all');
+  const [saveAsPersistentRule, setSaveAsPersistentRule] = useState(true);
+  const [cleanerRuleScope, setCleanerRuleScope] = useState<'global' | 'novel'>('global');
+  const [isPreviewMatchesOpen, setIsPreviewMatchesOpen] = useState(false);
+  const [previousChaptersBackup, setPreviousChaptersBackup] = useState<Chapter[] | null>(null);
+  const [isCleaningInProgress, setIsCleaningInProgress] = useState(false);
+
   // Toggle Category Collapse
   const toggleCategoryCollapse = (cat: string) => {
     setCollapsedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
@@ -108,8 +148,236 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
 
   const safeRules = useMemo(() => Array.isArray(rules) ? rules.filter(Boolean) : [], [rules]);
   const safeIgnoreTerms = useMemo(() => Array.isArray(ignoreTerms) ? ignoreTerms.filter(Boolean) : [], [ignoreTerms]);
+  const safeCleanerRules = useMemo(() => Array.isArray(cleanerRules) ? cleanerRules.filter(Boolean) : [], [cleanerRules]);
+  const safeChapters = useMemo(() => Array.isArray(chapters) ? chapters.filter(Boolean) : [], [chapters]);
 
-  // Filtered Rules
+  // Live scan result for the current cleanerInput
+  const liveScanResult: CleanScanResult = useMemo(() => {
+    if (!cleanerInput.trim() || safeChapters.length === 0) {
+      return { totalMatchingLines: 0, matchingChaptersCount: 0, matchedChapters: [] };
+    }
+    return scanChaptersForPattern(
+      safeChapters,
+      cleanerInput,
+      cleanerMode,
+      cleanerCaseSensitive,
+      cleanerScope === 'current' ? currentChapterIndex : undefined
+    );
+  }, [cleanerInput, cleanerMode, cleanerCaseSensitive, cleanerScope, safeChapters, currentChapterIndex]);
+
+  // Execute single pattern clean
+  const handleExecuteClean = () => {
+    if (!cleanerInput.trim()) {
+      showNotification('Please paste or type the text you want to remove', 'error');
+      return;
+    }
+
+    if (safeChapters.length === 0 || !setChapters) {
+      showNotification('No chapters available to clean', 'error');
+      return;
+    }
+
+    setIsCleaningInProgress(true);
+
+    try {
+      // 1. Create backup for undo
+      setPreviousChaptersBackup([...safeChapters]);
+
+      // 2. Clean chapters
+      const result = executeCleanChapters(
+        safeChapters,
+        cleanerInput,
+        cleanerMode,
+        cleanerCaseSensitive,
+        cleanerScope === 'current' ? currentChapterIndex : undefined
+      );
+
+      if (result.totalRemovedCount === 0) {
+        showNotification('No matching lines found to remove', 'info');
+        setIsCleaningInProgress(false);
+        return;
+      }
+
+      // 3. Update chapter state & localStorage
+      setChapters(result.updatedChapters);
+      try {
+        localStorage.setItem('novel_chapters', JSON.stringify(result.updatedChapters));
+      } catch (e) {
+        console.error('Failed to sync cleaned chapters to localStorage:', e);
+      }
+
+      // 4. Optionally save as persistent rule
+      if (saveAsPersistentRule && setCleanerRules) {
+        const trimmedPattern = cleanerInput.trim();
+        const existingRule = safeCleanerRules.find(r => r.pattern.trim().toLowerCase() === trimmedPattern.toLowerCase() && r.mode === cleanerMode);
+        
+        if (!existingRule) {
+          const newRule: LineCleanerRule = {
+            id: `cleaner-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            pattern: trimmedPattern,
+            mode: cleanerMode,
+            enabled: true,
+            scope: cleanerRuleScope,
+            bookTitle: cleanerRuleScope === 'novel' ? currentBookTitle : undefined,
+            caseSensitive: cleanerCaseSensitive,
+            removedCount: result.totalRemovedCount,
+            createdAt: Date.now()
+          };
+          setCleanerRules(prev => [newRule, ...prev]);
+        } else {
+          // Increment match count
+          setCleanerRules(prev => prev.map(r => r.id === existingRule.id ? {
+            ...r,
+            removedCount: (r.removedCount || 0) + result.totalRemovedCount
+          } : r));
+        }
+      }
+
+      showNotification(
+        `Successfully removed ${result.totalRemovedCount} line${result.totalRemovedCount > 1 ? 's' : ''} across ${result.affectedChaptersCount} chapter${result.affectedChaptersCount > 1 ? 's' : ''}!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Error executing chapter cleaner:', err);
+      showNotification('Failed to clean chapters', 'error');
+    } finally {
+      setIsCleaningInProgress(false);
+    }
+  };
+
+  // Undo last clean
+  const handleUndoClean = () => {
+    if (!previousChaptersBackup || !setChapters) return;
+    setChapters(previousChaptersBackup);
+    try {
+      localStorage.setItem('novel_chapters', JSON.stringify(previousChaptersBackup));
+    } catch (e) {
+      console.error('Failed to undo chapters in localStorage:', e);
+    }
+    setPreviousChaptersBackup(null);
+    showNotification('Restored chapters to state before last clean', 'info');
+  };
+
+  // Execute all saved cleaner rules on all chapters
+  const handleRunAllSavedCleanerRules = () => {
+    if (safeChapters.length === 0 || safeCleanerRules.length === 0 || !setChapters) {
+      showNotification('No active cleaner rules or chapters found', 'info');
+      return;
+    }
+
+    setPreviousChaptersBackup([...safeChapters]);
+    const { updatedChapters, totalRemoved } = executeAllCleanerRules(
+      safeChapters,
+      safeCleanerRules,
+      currentBookTitle
+    );
+
+    if (totalRemoved === 0) {
+      showNotification('All chapters are already clean. No matching lines found.', 'info');
+      return;
+    }
+
+    setChapters(updatedChapters);
+    try {
+      localStorage.setItem('novel_chapters', JSON.stringify(updatedChapters));
+    } catch (e) {
+      console.error('Failed to save cleaned chapters to localStorage:', e);
+    }
+
+    if (setCleanerRules) {
+      setCleanerRules([...safeCleanerRules]);
+    }
+
+    showNotification(`Cleaned ${totalRemoved} lines using saved rules!`, 'success');
+  };
+
+  // Delete a saved cleaner rule
+  const handleDeleteCleanerRule = (id: string) => {
+    if (setCleanerRules) {
+      setCleanerRules(prev => prev.filter(r => r.id !== id));
+      showNotification('Deleted cleaner rule', 'info');
+    }
+  };
+
+  // Toggle saved cleaner rule enabled
+  const handleToggleCleanerRule = (id: string) => {
+    if (setCleanerRules) {
+      setCleanerRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+    }
+  };
+
+  // Quick preset loader
+  const handleApplyPreset = (preset: typeof COMMON_CLEANER_PRESETS[0]) => {
+    setCleanerInput(preset.pattern);
+    setCleanerMode(preset.mode);
+    setCleanerCaseSensitive(false);
+    showNotification(`Loaded preset: "${preset.title}"`, 'info');
+  };
+
+  // Export JSON
+  const handleExportJSON = () => {
+    const data: TerminologyDictionaryExport = {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      rules: safeRules,
+      ignoreTerms: safeIgnoreTerms,
+      cleanerRules: safeCleanerRules
+    };
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `novel-terminology-dictionary.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showNotification('Exported terminology & cleaner dictionary');
+  };
+
+  // Import JSON
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        if (json && (Array.isArray(json.rules) || Array.isArray(json.cleanerRules))) {
+          // Merge imported rules
+          if (Array.isArray(json.rules)) {
+            const existingIds = new Set(rules.map(r => r.id));
+            const newRules = json.rules.map((r: any) => ({
+              ...r,
+              id: existingIds.has(r.id) ? `imported-${Date.now()}-${Math.random().toString(36).substring(2, 6)}` : r.id
+            }));
+            setRules(prev => [...newRules, ...prev]);
+          }
+
+          if (Array.isArray(json.ignoreTerms)) {
+            setIgnoreTerms(prev => [...json.ignoreTerms, ...prev]);
+          }
+
+          if (Array.isArray(json.cleanerRules) && setCleanerRules) {
+            const existingCleanIds = new Set(safeCleanerRules.map(c => c.id));
+            const newCleanRules = json.cleanerRules.map((c: any) => ({
+              ...c,
+              id: existingCleanIds.has(c.id) ? `imported-clean-${Date.now()}-${Math.random().toString(36).substring(2, 6)}` : c.id
+            }));
+            setCleanerRules(prev => [...newCleanRules, ...prev]);
+          }
+
+          showNotification('Successfully imported rules and cleaner settings!');
+        } else {
+          showNotification('Invalid terminology JSON file structure', 'error');
+        }
+      } catch (err) {
+        showNotification('Failed to parse JSON file', 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
   const filteredRules = useMemo(() => {
     return safeRules.filter(r => {
       if (!r || typeof r !== 'object') return false;
@@ -318,59 +586,6 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
     showNotification('Removed term from Ignore List', 'info');
   };
 
-  // Export JSON
-  const handleExportJSON = () => {
-    const data = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      rules,
-      ignoreTerms
-    };
-    const jsonStr = JSON.stringify(data, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `novel-terminology-dictionary.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showNotification('Exported terminology dictionary');
-  };
-
-  // Import JSON
-  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const json = JSON.parse(event.target?.result as string);
-        if (json && Array.isArray(json.rules)) {
-          // Merge imported rules
-          const existingIds = new Set(rules.map(r => r.id));
-          const newRules = json.rules.map((r: any) => ({
-            ...r,
-            id: existingIds.has(r.id) ? `imported-${Date.now()}-${Math.random().toString(36).substring(2, 6)}` : r.id
-          }));
-          setRules(prev => [...newRules, ...prev]);
-
-          if (Array.isArray(json.ignoreTerms)) {
-            setIgnoreTerms(prev => [...json.ignoreTerms, ...prev]);
-          }
-
-          showNotification(`Successfully imported ${newRules.length} rules!`);
-        } else {
-          showNotification('Invalid terminology JSON file structure', 'error');
-        }
-      } catch (err) {
-        showNotification('Failed to parse JSON file', 'error');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
   // Live Tested Output
   const liveTestedOutput = useMemo(() => {
     try {
@@ -493,6 +708,18 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
             >
               <BarChart2 className="w-3.5 h-3.5" />
               <span>Statistics</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('cleaner')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'cleaner' 
+                  ? 'bg-[#FF79B0] text-slate-950 shadow-md font-extrabold' 
+                  : 'text-white/70 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Eraser className="w-3.5 h-3.5" />
+              <span>Line Cleaner {(safeCleanerRules.length > 0) ? `(${safeCleanerRules.length})` : ''}</span>
             </button>
           </div>
 
@@ -945,6 +1172,355 @@ export const TerminologyManagerModal: React.FC<TerminologyManagerModalProps> = (
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: LINE & BOILERPLATE CLEANER */}
+          {activeTab === 'cleaner' && (
+            <div className="space-y-6">
+              {/* Top Quick Scrub Box */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-white/[0.07] to-white/[0.02] border border-white/15 shadow-xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-xl bg-[#FF79B0]/20 text-[#FF79B0] border border-[#FF79B0]/30">
+                      <Eraser className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-white font-serif">Remove Repetitive Lines & Disclaimers</h3>
+                      <p className="text-[11px] text-white/50">
+                        Paste boilerplate ads, error reporting notes, or watermarks to scrub them from all chapters.
+                      </p>
+                    </div>
+                  </div>
+
+                  {previousChaptersBackup && (
+                    <button
+                      type="button"
+                      onClick={handleUndoClean}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                    >
+                      <Undo2 className="w-3.5 h-3.5" />
+                      <span>Undo Last Clean</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Quick Presets Pills */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] uppercase font-mono font-bold text-white/40 tracking-wider">
+                    Quick Presets:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {COMMON_CLEANER_PRESETS.map((preset, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleApplyPreset(preset)}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-white/80 hover:text-white text-[11px] font-medium transition-all cursor-pointer flex items-center gap-1"
+                        title={preset.description}
+                      >
+                        <Zap className="w-3 h-3 text-[#FF79B0]" />
+                        <span>{preset.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Input Textarea */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#FF79B0]">
+                      Text / Line to Remove
+                    </label>
+                    {cleanerInput && (
+                      <button
+                        type="button"
+                        onClick={() => setCleanerInput('')}
+                        className="text-[10px] text-white/40 hover:text-white flex items-center gap-1 cursor-pointer"
+                      >
+                        <X className="w-3 h-3" /> Clear Text
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={cleanerInput}
+                    onChange={(e) => setCleanerInput(e.target.value)}
+                    placeholder="Paste repetitive line here (e.g. 'If you find any errors (non-standard content, ads redirect, broken links, etc..), Please let us know so we can fix it as soon as possible.')"
+                    className="w-full p-3 rounded-xl bg-black/40 border border-white/15 text-white text-xs font-mono leading-relaxed placeholder-white/30 focus:outline-none focus:border-[#FF79B0] focus:ring-1 focus:ring-[#FF79B0]/30 custom-scrollbar select-text"
+                  />
+                </div>
+
+                {/* Options Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                  {/* Matching Mode */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-white/60 uppercase tracking-wider block">
+                      Match Mode
+                    </label>
+                    <select
+                      value={cleanerMode}
+                      onChange={(e) => setCleanerMode(e.target.value as CleanerMatchMode)}
+                      className="w-full px-3 py-2 rounded-xl bg-white/5 border border-white/15 text-white text-xs focus:outline-none focus:border-[#FF79B0] cursor-pointer"
+                    >
+                      <option value="contains" className="bg-[#16181D]">Contains Phrase (Removes whole line)</option>
+                      <option value="exact" className="bg-[#16181D]">Exact Match (Whole line match)</option>
+                      <option value="inline_strip" className="bg-[#16181D]">Inline Strip (Only strip phrase inside line)</option>
+                      <option value="regex" className="bg-[#16181D]">Regex Expression</option>
+                    </select>
+                  </div>
+
+                  {/* Clean Scope */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-white/60 uppercase tracking-wider block">
+                      Target Scope
+                    </label>
+                    <div className="flex items-center gap-1 p-1 bg-white/5 rounded-xl border border-white/15">
+                      <button
+                        type="button"
+                        onClick={() => setCleanerScope('all')}
+                        className={`flex-1 py-1 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          cleanerScope === 'all' ? 'bg-[#FF79B0] text-slate-950' : 'text-white/70 hover:text-white'
+                        }`}
+                      >
+                        All Chapters ({safeChapters.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCleanerScope('current')}
+                        className={`flex-1 py-1 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          cleanerScope === 'current' ? 'bg-[#FF79B0] text-slate-950' : 'text-white/70 hover:text-white'
+                        }`}
+                      >
+                        Current Chapter
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Case Sensitive Toggle */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-white/60 uppercase tracking-wider block">
+                      Casing
+                    </label>
+                    <label className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/15 cursor-pointer h-[38px]">
+                      <input
+                        type="checkbox"
+                        checked={cleanerCaseSensitive}
+                        onChange={(e) => setCleanerCaseSensitive(e.target.checked)}
+                        className="accent-[#FF79B0]"
+                      />
+                      <span className="text-xs text-white/90">Case-Sensitive</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Real-time Match Banner & Preview */}
+                {cleanerInput.trim() && (
+                  <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 text-xs">
+                        {liveScanResult.totalMatchingLines > 0 ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                            <span className="text-emerald-300 font-bold">
+                              Found <span className="underline font-extrabold">{liveScanResult.totalMatchingLines}</span> matching line{liveScanResult.totalMatchingLines > 1 ? 's' : ''} across <span className="underline font-extrabold">{liveScanResult.matchingChaptersCount}</span> chapter{liveScanResult.matchingChaptersCount > 1 ? 's' : ''}.
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                            <span className="text-amber-300">
+                              No matches found in {cleanerScope === 'all' ? 'any chapters' : 'the current chapter'}.
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {liveScanResult.totalMatchingLines > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setIsPreviewMatchesOpen(!isPreviewMatchesOpen)}
+                          className="text-[11px] text-[#FF79B0] hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>{isPreviewMatchesOpen ? 'Hide Matches' : `Preview Matches (${liveScanResult.matchingChaptersCount})`}</span>
+                          {isPreviewMatchesOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Expandable Preview Snippets */}
+                    {isPreviewMatchesOpen && liveScanResult.matchedChapters.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto space-y-2 p-2.5 bg-black/40 rounded-xl border border-white/10 custom-scrollbar select-text text-xs">
+                        {liveScanResult.matchedChapters.slice(0, 10).map((mc, idx) => (
+                          <div key={idx} className="p-2 rounded-lg bg-white/5 border border-white/5 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-white/80">
+                              <span>{mc.chapterTitle || `Chapter ${mc.chapterNumber}`}</span>
+                              <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-mono text-[10px]">
+                                {mc.matchedIndices.length} line{mc.matchedIndices.length > 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5 text-white/60 font-serif italic text-[11px]">
+                              {mc.sampleMatches.map((sample, sIdx) => (
+                                <p key={sIdx} className="truncate bg-rose-500/10 px-1.5 py-0.5 rounded text-rose-200">
+                                  "{sample}"
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {liveScanResult.matchedChapters.length > 10 && (
+                          <p className="text-center text-[10px] text-white/40 italic">
+                            + {liveScanResult.matchedChapters.length - 10} more chapters with matching lines
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-white/80">
+                      <input
+                        type="checkbox"
+                        checked={saveAsPersistentRule}
+                        onChange={(e) => setSaveAsPersistentRule(e.target.checked)}
+                        className="accent-[#FF79B0]"
+                      />
+                      <span>Save as persistent rule</span>
+                    </label>
+
+                    {saveAsPersistentRule && (
+                      <select
+                        value={cleanerRuleScope}
+                        onChange={(e) => setCleanerRuleScope(e.target.value as 'global' | 'novel')}
+                        className="px-2 py-1 rounded-lg bg-white/5 border border-white/15 text-white text-[11px] focus:outline-none focus:border-[#FF79B0]"
+                      >
+                        <option value="global" className="bg-[#16181D]">Global (All Novels)</option>
+                        <option value="novel" className="bg-[#16181D]">Novel Only ({currentBookTitle})</option>
+                      </select>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleExecuteClean}
+                    disabled={!cleanerInput.trim() || isCleaningInProgress}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-[#FF79B0] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-lg flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>
+                      {cleanerScope === 'all' 
+                        ? `Remove from All Chapters (${safeChapters.length})` 
+                        : 'Remove from Current Chapter'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Saved Cleaner Rules Section */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h4 className="font-bold text-xs uppercase tracking-wider text-[#FF79B0] flex items-center gap-2">
+                      <ListFilter className="w-3.5 h-3.5" />
+                      <span>Saved Auto-Cleaner Rules ({safeCleanerRules.length})</span>
+                    </h4>
+                    <p className="text-[11px] text-white/50">
+                      These rules clean chapters and will automatically apply to repetitive junk.
+                    </p>
+                  </div>
+
+                  {safeCleanerRules.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleRunAllSavedCleanerRules}
+                      className="px-3.5 py-1.5 rounded-xl bg-[#FF79B0]/20 hover:bg-[#FF79B0]/30 text-[#FF79B0] border border-[#FF79B0]/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Run All Rules on All Chapters</span>
+                    </button>
+                  )}
+                </div>
+
+                {safeCleanerRules.length === 0 ? (
+                  <div className="text-center py-8 px-4 rounded-xl bg-white/[0.02] border border-dashed border-white/10 text-white/40 space-y-1">
+                    <p className="text-xs font-bold text-white/60">No saved cleaner rules yet</p>
+                    <p className="text-[11px]">Paste repetitive text above and check "Save as persistent rule" to build your cleaning dictionary.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {safeCleanerRules.map((rule) => (
+                      <div
+                        key={rule.id}
+                        className="p-3 rounded-xl bg-white/5 border border-white/10 hover:border-white/20 transition-all flex flex-wrap items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCleanerRule(rule.id)}
+                            className={`w-9 h-5 rounded-full transition-all relative flex items-center p-0.5 flex-shrink-0 cursor-pointer ${
+                              rule.enabled ? 'bg-[#FF79B0]' : 'bg-white/20'
+                            }`}
+                          >
+                            <div className={`w-4 h-4 rounded-full bg-slate-900 shadow-sm transition-transform ${
+                              rule.enabled ? 'translate-x-4' : 'translate-x-0'
+                            }`} />
+                          </button>
+
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <p className="font-mono text-xs text-white truncate select-text font-bold">
+                              "{rule.pattern}"
+                            </p>
+                            <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                              <span className="px-1.5 py-0.5 rounded bg-white/10 text-white/70 font-mono uppercase font-bold">
+                                {rule.mode}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded font-bold ${
+                                rule.scope === 'global' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                              }`}>
+                                {rule.scope === 'global' ? 'Global' : `Novel: ${rule.bookTitle || currentBookTitle}`}
+                              </span>
+                              {rule.caseSensitive && (
+                                <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold">
+                                  Case-Sensitive
+                                </span>
+                              )}
+                              <span className="text-white/40">
+                                Removed: {rule.removedCount || 0} lines
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCleanerInput(rule.pattern);
+                              setCleanerMode(rule.mode);
+                              setCleanerCaseSensitive(rule.caseSensitive);
+                            }}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition-all cursor-pointer"
+                            title="Load into cleaner input"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCleanerRule(rule.id)}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 transition-all cursor-pointer"
+                            title="Delete rule"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
